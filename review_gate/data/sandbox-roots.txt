@@ -1,0 +1,9 @@
+# The write roots the Claude Code sandbox grants every lane outside its
+# settings files, which stage 1 refuses a ledger database in. Each line is a
+# path relative to the caller's home directory; a store inside one, or one
+# inside the store, is refused by file identity. A missing, symlinked or
+# malformed copy of this file refuses every store.
+#
+# Add only a root a lane is shown to be granted.
+.npm/_logs
+.claude/debug

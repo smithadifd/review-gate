@@ -1,0 +1,2 @@
+# path	sha256 of the lowercased matched text (hashes only; the text is never written here)	reason
+# A row allows one deny-list match in one path. The pseudo path :commit-identity allows a match in a commit's author or committer identity.

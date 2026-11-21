@@ -1,0 +1,15 @@
+# The platform temp roots stage 1 refuses a ledger database in. Each line is
+# an absolute path; a store inside one, or one inside the store, is refused
+# by file identity, and so is a store overlapping the caller's own $TMPDIR or
+# tempfile.gettempdir(). A missing, symlinked or malformed copy of this file
+# refuses every store.
+#
+# /var/folders holds only per-user temp and cache directories, so it is listed
+# whole rather than as its per-user T directories.
+/tmp
+/private/tmp
+/var/tmp
+/private/var/tmp
+/var/folders
+/private/var/folders
+/dev/shm

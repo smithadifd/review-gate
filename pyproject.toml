@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "review-gate"
+version = "0.1.0"
+description = "A head-pinned merge command that reads review records from the ledger and live GitHub state."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+# PyYAML reads workflow files; the merge command refuses pyyaml_missing without it.
+dependencies = ["PyYAML>=6"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+review-gate = "review_gate.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["review_gate", "review_gate.*"]
+
+[tool.setuptools.package-data]
+review_gate = ["data/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
