@@ -1,3 +1,4 @@
 # path	sha256 of the lowercased matched text (hashes only; the text is never written here)	reason
 # A row allows one deny-list match in one path. The pseudo path :commit-identity allows a match in a commit's author or committer identity.
 :commit-identity	95a86be226161e30e5f20e9938d8ed0947429cabacc4f481dded0ad2a45f0d94	the owner's GitHub handle in the GitHub noreply commit address, which the owner chose for this public repository (owner picker 2026-11-21)
+:commit-identity	d979885447a413abb6d606a5d0f45c3b7809e6fde2c83f0df3426f1fc9bfed97	the owner's name in the commit identity of a public repository whose LICENSE already names him as the copyright holder (owner chose this identity 2026-11-21)

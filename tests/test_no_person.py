@@ -13,10 +13,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check-no-person.py"
-ALLOWANCE = ROOT / "scripts" / "no-person-allowance.tsv"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 WORD = "zebra" + "fish"
 CLEAN_ID = ("Test Author", "author@example.invalid")
+# The scratch repositories carry their own allowance file: only a comment header, no rows.
+# They never copy the repository's live file, so a real row there can never read as stale in a scratch scan.
+ALLOWANCE_FIXTURE = (
+    "# path\tsha256 of the lowercased matched text\treason\n"
+    "# A row allows one deny-list match in one path. The pseudo path :commit-identity allows a match in a commit's author or committer identity.\n"
+)
 
 
 def git(repo: Path, *args, identity=CLEAN_ID) -> str:
@@ -37,7 +42,7 @@ def scratch(tmp_path: Path, files=None, message="chore: start", identity=CLEAN_I
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, repo / "scripts" / "check-no-person.py")
-    shutil.copy(ALLOWANCE, repo / "scripts" / "no-person-allowance.tsv")
+    (repo / "scripts" / "no-person-allowance.tsv").write_text(ALLOWANCE_FIXTURE, encoding="utf-8")
     for name, text in (files or {"README.md": "a clean file\n"}).items():
         path = repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
