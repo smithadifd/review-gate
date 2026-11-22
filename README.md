@@ -36,6 +36,7 @@ Anything outside this grammar refuses by name before any read.
 | 4 | a merge call was made and its outcome is not confirmed in the records | one stderr line: `merge_unconfirmed: ...` or `merge_finish_unrecorded: ...` |
 
 An error that escapes a stage is a named refusal (`internal_error`), never a traceback.
+Each `gh` process has a 60-second deadline; a stalled process refuses `gh_timeout`.
 
 ## The stages
 
@@ -82,10 +83,10 @@ python3 -I scripts/check-no-person.py
 The runtime needs Python 3.11 or later, `gh` on `PATH`, and PyYAML; without PyYAML the command
 refuses `pyyaml_missing`.
 
-CI runs on GitHub-hosted runners and every job is off while the repository is private. Until the
-repository is public, pull requests are gated by running the workflow's commands locally on the
-final head. The no-person scan reads its person and owner words from the `NO_PERSON_DENY` secret and
-fails in CI when it is unset.
+This repository is public; CI runs on GitHub-hosted runners. Every job retains a condition that
+disables it if the repository becomes private. The no-person scan reads its person and owner words
+from the `NO_PERSON_DENY` secret and fails in CI when it is unset. It checks the index, commit metadata
+and every reachable historical blob, applying the same path-scoped allowances to file contents.
 
 ## License
 

@@ -188,3 +188,40 @@ def test_an_unexpected_error_is_internal_error_with_exit_2(rig, monkeypatch):
     assert result.code == 2
     assert result.reason == "internal_error"
     assert "Traceback" not in result.err
+
+
+def test_a_refusal_from_the_merge_transport_exits_unconfirmed(rig, monkeypatch):
+    from review_gate.gh import GhTransport
+    from review_gate.refusal import Refusal
+
+    original = GhTransport.run
+    attempted = []
+
+    def transport(self, args):
+        if args[:2] == ["pr", "merge"]:
+            attempted.append(args)
+            raise Refusal("gh_unavailable", "transport lost after dispatch")
+        return original(self, args)
+
+    monkeypatch.setattr(GhTransport, "run", transport)
+    result = rig.run()
+    assert attempted == [merge_argv(rig.repo.url, rig.repo.head)]
+    assert result.code == 4, "post-merge refusal must not report nothing merged"
+    assert result.reason == "merge_unconfirmed"
+    assert "write_finished" not in rig.port.names()
+
+
+def test_an_output_error_after_merge_exits_unconfirmed(rig, monkeypatch):
+    import io
+
+    class BrokenOutput(io.StringIO):
+        def write(self, text):
+            if text.startswith("merged "):
+                raise OSError("output unavailable")
+            return super().write(text)
+
+    monkeypatch.setattr("rig.io.StringIO", BrokenOutput)
+    result = rig.run()
+    assert rig.merge_calls() == [merge_argv(rig.repo.url, rig.repo.head)]
+    assert result.code == 4, "post-merge exception must not report nothing merged"
+    assert result.reason == "merge_unconfirmed"

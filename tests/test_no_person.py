@@ -77,6 +77,18 @@ def test_a_planted_word_in_a_file_fails(tmp_path):
     assert WORD not in output.lower()
 
 
+def test_a_word_removed_from_the_tree_still_fails_in_history(tmp_path):
+    repo = scratch(tmp_path, {"notes.md": f"made by {WORD.title()}\n"})
+    planted = git(repo, "rev-parse", "HEAD").strip()
+    (repo / "notes.md").write_text("clean now\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "docs: remove old content")
+    code, output = scan(repo)
+    assert code == 1, "reachable historical blob was accepted"
+    assert f"commit {planted[:12]}: notes.md:1: deny-list" in output
+    assert WORD not in output.lower()
+
+
 def test_a_planted_home_path_fails(tmp_path):
     code, output = scan(scratch(tmp_path, {"notes.md": "see /Us" + "ers/someone/x\n"}))
     assert code == 1

@@ -35,6 +35,12 @@ def test_selection_by_paths_and_branches():
         "main",
     )
     assert found == {".github/workflows/ci.yml": "CI"}
+    mixed = selected_workflows(
+        docs(ci="name: CI\non:\n  pull_request:\n    paths-ignore: ['docs/**']\n"),
+        ["docs/a.md", "src/b.py"],
+        "main",
+    )
+    assert mixed == {".github/workflows/ci.yml": "CI"}
 
 
 def test_a_workflow_with_no_name_is_named_by_its_path():
@@ -58,6 +64,17 @@ def test_a_workflow_with_no_name_is_named_by_its_path():
 def test_an_unreadable_trigger_refuses(text):
     with pytest.raises(Refusal) as refused:
         selected_workflows(docs(x=text), ["src/app.py"], "main")
+    assert refused.value.name == "workflow_paths_unreadable"
+
+
+@pytest.mark.parametrize("pattern", ["src/*.jsx?", "src/[!a]*"])
+def test_unsupported_path_globs_refuse(pattern):
+    with pytest.raises(Refusal) as refused:
+        selected_workflows(
+            docs(x=f"on:\n  pull_request:\n    paths: ['{pattern}']\n"),
+            ["src/page.js"],
+            "main",
+        )
     assert refused.value.name == "workflow_paths_unreadable"
 
 

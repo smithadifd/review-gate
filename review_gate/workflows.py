@@ -125,6 +125,8 @@ def ignore_match(pattern: str, path: str) -> bool:
 def path_filter_readable(pattern: str) -> bool:
     if not pattern or pattern.startswith("!") or "\\" in pattern or "+" in pattern:
         return False
+    if "?" in pattern or "[" in pattern:
+        return False
     for segment in pattern.split("/"):
         if segment in ("", ".", ".."):
             return False

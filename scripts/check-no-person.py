@@ -12,7 +12,9 @@ tag, so the scan covers it as well as the tree:
   which is the checked-out commit in CI), binary files included, and every
   tracked path name;
 - the history: every commit reachable from HEAD, read from its raw object:
-  its message, and its author and committer identities (name and email).
+  its message, author and committer identities (name and email), and every
+  path and blob in its tree. Blob bytes are read once per object id; rules
+  and allowances are applied separately for each path that names the blob.
 
 Rules, over every line:
 
@@ -35,7 +37,8 @@ Rules, over every line:
 Output, one line per hit, never the matched text and never the variable:
 ``<path>:<line>: <rule>``, ``<path>: path name: <rule>``, ``tracked path
 #<n>: deny-list (path name)``, ``commit <sha12>: message line <n>: <rule>``,
-``commit <sha12>: author: <rule>`` or ``commit <sha12>: committer: <rule>``,
+``commit <sha12>: author: <rule>``, ``commit <sha12>: committer: <rule>`` or
+``commit <sha12>: <path>:<line>: <rule>`` for historical file contents,
 ``scripts/no-person-allowance.tsv:<line>: stale allowance`` for a row that
 matched nothing, ``<path>: unreadable (<reason>)`` and ``no-person:
 <reason>`` for a configuration failure.
@@ -307,6 +310,40 @@ def scan_history(commits: list, deny, allowed: dict, used: set) -> list:
     return hits
 
 
+def scan_historical_blobs(root: Path, commits: list, blobs: dict, deny, allowed: dict, used: set) -> list:
+    """Read each historical blob once, retaining its paths for path-scoped allowances."""
+    locations = {}
+    for sha, _author, _committer, _message in commits:
+        tree = git(["ls-tree", "-r", "-z", "--full-tree", sha], root)
+        for record in tree.split(b"\0"):
+            if not record:
+                continue
+            meta, name = record.split(b"\t", 1)
+            _mode, kind, oid = meta.decode("ascii").split(" ")
+            path = name.decode("utf-8", "surrogateescape")
+            locations.setdefault((kind, oid), {}).setdefault(path, sha)
+    blobs.update(read_objects(
+        root, [oid for kind, oid in locations if kind == "blob" and oid not in blobs], "blob",
+    ))
+    hits = []
+    for (kind, oid), paths in locations.items():
+        for number, (path, sha) in enumerate(paths.items(), 1):
+            prefix = f"commit {sha[:12]}: "
+            denied_path = deny is not None and deny.search(path)
+            label = f"historical path #{number}" if denied_path else path
+            for name, pattern in SHAPES:
+                if pattern.search(path):
+                    hits.append(f"{prefix}{label}: path name: no-person shape: {name}")
+            if denied_path:
+                hits.append(f"{prefix}{label}: deny-list (path name)")
+            if kind != "blob":
+                hits.append(f"{prefix}{label}: unreadable (a submodule entry, not a file)")
+                continue
+            for finding in scan_text(path, blobs[oid], deny, allowed, used):
+                hits.append(prefix + label + finding[len(path):])
+    return hits
+
+
 def check(root: Path, environ: dict) -> tuple:
     """(findings, warnings, files scanned, commits scanned)."""
     findings = []
@@ -353,6 +390,7 @@ def check(root: Path, environ: dict) -> tuple:
         findings.extend(scan_text(path, blobs[blob], deny, allowed, used))
     commits = history(root)
     findings.extend(scan_history(commits, deny, allowed, used))
+    findings.extend(scan_historical_blobs(root, commits, blobs, deny, allowed, used))
     if deny is not None:
         for pair, line in sorted(allowed.items(), key=lambda item: item[1]):
             if pair not in used:

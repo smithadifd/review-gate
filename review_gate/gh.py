@@ -3,7 +3,8 @@
 ``GhTransport`` runs the ``gh`` executable it was built with and returns its
 exit code, stdout and stderr. It decides nothing. The shipped command builds
 it from ``gh`` on PATH; a test builds it with the path of a fake ``gh`` from
-Python. With no executable, every call refuses ``gh_unavailable``.
+Python. With no executable, every call refuses ``gh_unavailable``. Each
+process has a 60-second deadline; a stalled process refuses ``gh_timeout``.
 """
 from __future__ import annotations
 
@@ -21,16 +22,20 @@ class GhResult(NamedTuple):
 
 
 class GhTransport:
-    def __init__(self, executable: str | None) -> None:
+    def __init__(self, executable: str | None, *, timeout: float = 60) -> None:
         self.executable = executable
+        self.timeout = timeout
 
     def run(self, args: list) -> GhResult:
         if not self.executable:
             refuse("gh_unavailable", "the gh command is not on PATH")
         try:
             done = subprocess.run(
-                [self.executable, *args], capture_output=True, stdin=subprocess.DEVNULL, check=False
+                [self.executable, *args], capture_output=True, stdin=subprocess.DEVNULL, check=False,
+                timeout=self.timeout,
             )
+        except subprocess.TimeoutExpired:
+            refuse("gh_timeout", f"gh exceeded its {self.timeout:g}-second deadline")
         except OSError as exc:
             refuse("gh_unavailable", f"gh could not start: {exc.strerror or exc}")
         return GhResult(done.returncode, done.stdout, done.stderr)

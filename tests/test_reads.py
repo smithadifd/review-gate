@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -29,6 +31,29 @@ def test_a_gh_that_cannot_start_refuses_gh_unavailable(tmp_path):
     with pytest.raises(Refusal) as refused:
         GhTransport(str(tmp_path / "no-such-gh")).run(["api", "x"])
     assert refused.value.name == "gh_unavailable"
+
+
+def test_a_stalled_gh_refuses_by_timeout(tmp_path):
+    fake = tmp_path / "gh"
+    fake.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(1)\n", encoding="utf-8")
+    fake.chmod(0o755)
+    probe = (
+        "import sys\n"
+        "from review_gate.gh import GhTransport\n"
+        "from review_gate.refusal import Refusal\n"
+        "try:\n"
+        "    GhTransport(sys.argv[1], timeout=0.05).run(['api', 'x'])\n"
+        "except Refusal as exc:\n"
+        "    assert exc.name == 'gh_timeout', exc.name\n"
+        "else:\n"
+        "    raise AssertionError('gh_timeout was not raised')\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", probe, str(fake)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=5,
+    )
+    assert done.returncode == 0, done.stderr
 
 
 @pytest.mark.parametrize("lines", [

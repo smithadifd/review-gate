@@ -1,10 +1,9 @@
 name: ci
 
 # The repository's own gates, on GitHub-hosted runners only. Every job carries
-# the condition below: hosted Actions minutes are not free for a private
-# repository, so while this repository is private no job runs, and pull
-# requests are gated by running these same commands locally on the final head.
-# Once the repository is public the condition is true and every job runs.
+# the condition below: this repository is public, so every job runs. If it
+# becomes private, the condition disables hosted jobs because private
+# repositories consume paid minutes; run the same gates locally instead.
 # No path filter: every pull request and every push to main runs every job.
 on:
   push:
