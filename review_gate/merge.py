@@ -8,8 +8,9 @@ stage 3 resolved. Its state, read through the records port, is one of:
   ``gh pr merge <URL> --squash --match-head-commit <the argument sha>``.
   Whatever it exits, GitHub is read again: only a read showing the pull
   request MERGED, at the pinned head, with a merge commit, counts. Then the
-  finished record is written with that merge commit, and only then are the
-  ``--items`` closed. One stdout line, ``merged <URL> head=<sha>
+  finished record (key, pull request and head) is written; the merge commit
+  remains on GitHub and stdout. Only then are the ``--items`` closed.
+  One stdout line, ``merged <URL> head=<sha>
   merge_commit=<oid>``, and exit 0.
 - ``started``: an earlier run wrote the intent. GitHub is read and the
   state reconciled: MERGED at the pinned head writes the finished record (no

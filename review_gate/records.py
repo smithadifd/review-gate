@@ -2,11 +2,10 @@
 
 One object carries every call (``RecordsPort``). The merge command never
 opens the ledger itself; it asks the port, and the port answers from the
-ledger database. This release ships the port unfilled (``UnfilledRecords``):
-every call refuses ``records_unavailable``, so the shipped command refuses
-every pull request at stage 1 and never merges. No argument, environment
-variable or file selects another port; a filled port is passed to
-``review_gate.gate.run`` from Python only.
+ledger database. LEDGER_DB selects the filled ``LedgerRecords`` port and
+names only an absolute database file. Unset or empty selects
+``UnfilledRecords`` and refuses ``records_unavailable``. Neither arguments
+nor configuration can change the port class, stage list or policy.
 
 The calls, by stage:
 
@@ -110,13 +109,12 @@ class RecordsPort(Protocol):
 
 
 UNFILLED_DETAIL = (
-    "this build has no ledger records reader (the records port is unfilled), "
-    "so the merge command refuses every pull request"
+    "LEDGER_DB is unset or empty; name an absolute ledger database file"
 )
 
 
 class UnfilledRecords:
-    """The shipped port: every call refuses ``records_unavailable``."""
+    """The no-database port: every call refuses ``records_unavailable``."""
 
     def _refuse(self, *_args, **_kwargs):
         refuse("records_unavailable", UNFILLED_DETAIL)

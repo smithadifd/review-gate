@@ -289,6 +289,27 @@ def test_an_identity_allowance_row_allows_that_identity_only(tmp_path):
     assert "README.md:1: deny-list" in output
 
 
+def test_dependency_url_allowances_do_not_allow_the_handle_in_other_files(tmp_path):
+    handle = WORKFLOW.read_text(encoding="utf-8").split("https://github.com/", 1)[1].split("/", 1)[0]
+    paths = {".github/workflows/ci.yml", "README.md"}
+    rows = [
+        line for line in (ROOT / "scripts" / "no-person-allowance.tsv").read_text(encoding="utf-8").splitlines()
+        if line.split("\t", 1)[0] in paths
+    ]
+    repo = scratch(tmp_path, {path: f"https://github.com/{handle}/ledger.git@v0.6.1\n" for path in paths})
+    with open(repo / "scripts" / "no-person-allowance.tsv", "a", encoding="utf-8") as allowance:
+        allowance.write("".join(row + "\n" for row in rows))
+    git(repo, "add", "-A")
+    code, output = scan(repo, deny=handle)
+    assert code == 0, "the two pinned dependency URL allowances must both be used: " + output
+    (repo / "notes.md").write_text(f"{handle}\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    code, output = scan(repo, deny=handle)
+    assert code == 1, "a dependency URL allowance leaked to another file"
+    assert "notes.md:1: deny-list" in output.splitlines()
+    assert handle not in output.lower()
+
+
 def test_a_stale_allowance_row_fails(tmp_path):
     repo = scratch(tmp_path)
     row = f"README.md\t{hashlib.sha256(b'nothing').hexdigest()}\tno longer needed\n"

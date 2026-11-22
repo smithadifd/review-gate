@@ -126,11 +126,20 @@ def parse_remediation(value: str) -> frozenset:
 
 
 def parse_merge_args(argv) -> MergeArgs:
+    return _parse_args(argv, command=COMMAND, remediation_allowed=True)
+
+
+def parse_recovery_args(argv) -> MergeArgs:
+    """The merge grammar with verb ``recover`` and no remediation argument."""
+    return _parse_args(argv, command="recover", remediation_allowed=False)
+
+
+def _parse_args(argv, *, command, remediation_allowed) -> MergeArgs:
     """The checked arguments of ``review-gate merge``; ``argv`` excludes the program name."""
     argv = list(argv)
     if not argv:
         refuse("argument_missing", f"usage: {USAGE}")
-    if argv[0] != COMMAND:
+    if argv[0] != command:
         refuse("command_unknown", f"{argv[0]!r}; usage: {USAGE}")
     positionals = []
     items_value = None
@@ -151,6 +160,8 @@ def parse_merge_args(argv) -> MergeArgs:
             else:
                 items_value = token[len("--items="):]
         elif token == "--remediation" or token.startswith("--remediation="):
+            if not remediation_allowed:
+                refuse("argument_unknown", "--remediation is not part of recover")
             if remediation_value is not None:
                 refuse("remediation_given_twice", "--remediation is given more than once")
             if token == "--remediation":
