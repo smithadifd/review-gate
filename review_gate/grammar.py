@@ -22,6 +22,9 @@ outside the grammar refuses by name:
   with a control character or with leading or trailing whitespace. It is
   compared as an exact set with main's red jobs in stage 9;
 - any other flag, a missing positional or an extra one refuses.
+
+``review-gate recover`` takes the same grammar without ``--remediation``, and
+its refusals print its own usage (``RECOVERY_USAGE``).
 """
 from __future__ import annotations
 
@@ -37,6 +40,8 @@ ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 DOT_SEGMENTS = (".", "..")
 COMMAND = "merge"
 USAGE = "review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]"
+RECOVERY_COMMAND = "recover"
+RECOVERY_USAGE = "review-gate recover <PR URL> <full head sha> --items ID[,ID...]"
 
 
 @dataclass(frozen=True)
@@ -126,12 +131,21 @@ def parse_remediation(value: str) -> frozenset:
 
 
 def parse_merge_args(argv) -> MergeArgs:
-    """The checked arguments of ``review-gate merge``; ``argv`` excludes the program name."""
+    return _parse_args(argv, command=COMMAND, usage=USAGE, remediation_allowed=True)
+
+
+def parse_recovery_args(argv) -> MergeArgs:
+    """The merge grammar with verb ``recover`` and no remediation argument."""
+    return _parse_args(argv, command=RECOVERY_COMMAND, usage=RECOVERY_USAGE, remediation_allowed=False)
+
+
+def _parse_args(argv, *, command, usage, remediation_allowed) -> MergeArgs:
+    """The checked arguments of ``command``; ``argv`` excludes the program name; refusals print ``usage``."""
     argv = list(argv)
     if not argv:
-        refuse("argument_missing", f"usage: {USAGE}")
-    if argv[0] != COMMAND:
-        refuse("command_unknown", f"{argv[0]!r}; usage: {USAGE}")
+        refuse("argument_missing", f"usage: {usage}")
+    if argv[0] != command:
+        refuse("command_unknown", f"{argv[0]!r}; usage: {usage}")
     positionals = []
     items_value = None
     remediation_value = None
@@ -151,6 +165,8 @@ def parse_merge_args(argv) -> MergeArgs:
             else:
                 items_value = token[len("--items="):]
         elif token == "--remediation" or token.startswith("--remediation="):
+            if not remediation_allowed:
+                refuse("argument_unknown", "--remediation is not part of recover")
             if remediation_value is not None:
                 refuse("remediation_given_twice", "--remediation is given more than once")
             if token == "--remediation":
@@ -160,14 +176,14 @@ def parse_merge_args(argv) -> MergeArgs:
                 )
             remediation_value = token[len("--remediation="):]
         elif token.startswith("-"):
-            refuse("argument_unknown", f"{token!r}; usage: {USAGE}")
+            refuse("argument_unknown", f"{token!r}; usage: {usage}")
         else:
             if len(positionals) == 2:
-                refuse("argument_extra", f"{token!r}; usage: {USAGE}")
+                refuse("argument_extra", f"{token!r}; usage: {usage}")
             positionals.append(token)
         index += 1
     if len(positionals) < 2:
-        refuse("argument_missing", f"a PR URL and a full head sha are required; usage: {USAGE}")
+        refuse("argument_missing", f"a PR URL and a full head sha are required; usage: {usage}")
     url, sha = positionals
     pr = parse_pr_url(url)
     sha = parse_sha(sha)

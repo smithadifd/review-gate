@@ -1,4 +1,4 @@
-"""Stage 0: every argument is checked by name before any read, and the shipped command never merges."""
+"""Stage 0 checks every argument before reads; LEDGER_DB selects only the database."""
 from __future__ import annotations
 
 import io
@@ -117,8 +117,13 @@ def test_the_unfilled_port_refuses_every_call():
         assert refused.value.name == "records_unavailable"
 
 
-def test_the_shipped_command_never_reaches_github_or_the_merge_call(tmp_path, monkeypatch, capsys):
-    """The command as shipped refuses records_unavailable at stage 1 with a fake gh first on PATH."""
+@pytest.mark.parametrize("database", [None, ""])
+def test_the_shipped_command_never_reaches_github_or_the_merge_call(tmp_path, monkeypatch, capsys, database):
+    """No database configured: refuse at stage 1 without touching GitHub."""
+    if database is None:
+        monkeypatch.delenv("LEDGER_DB", raising=False)
+    else:
+        monkeypatch.setenv("LEDGER_DB", database)
     fake = FakeGh(tmp_path / "bin")
     fake.set_routes(Repo().routes())
     monkeypatch.setenv("PATH", str(fake.directory) + os.pathsep + os.environ.get("PATH", ""))
@@ -131,6 +136,7 @@ def test_the_shipped_command_never_reaches_github_or_the_merge_call(tmp_path, mo
 
 
 def test_the_shipped_wiring_is_the_unfilled_port(monkeypatch):
+    monkeypatch.delenv("LEDGER_DB", raising=False)
     seen = {}
 
     def spy(argv, **kwargs):
@@ -142,7 +148,7 @@ def test_the_shipped_wiring_is_the_unfilled_port(monkeypatch):
     assert type(seen["records"]) is UnfilledRecords
 
 
-def test_the_shipped_command_has_no_way_to_select_another_port(tmp_path, monkeypatch, capsys):
+def test_ledger_db_selects_records_but_never_policy_or_extra_arguments(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("REVIEW_GATE_RECORDS", "anything")
     monkeypatch.setenv("LEDGER_DB", str(tmp_path / "ledger.db"))
     for extra in (["--records", "x"], ["--port=x"], ["--ledger-db", "x"]):
@@ -151,7 +157,7 @@ def test_the_shipped_command_has_no_way_to_select_another_port(tmp_path, monkeyp
         assert capsys.readouterr().err.startswith("argument_unknown: ")
     code = cli.main(["merge", URL, SHA, "--items", ITEM])
     assert code == 2
-    assert capsys.readouterr().err.startswith("records_unavailable: ")
+    assert not capsys.readouterr().err.startswith("records_unavailable: ")
 
 
 def test_the_sha_is_compared_never_folded():

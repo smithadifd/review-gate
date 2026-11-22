@@ -462,6 +462,26 @@ class StoreCheck:
         except (OSError, ValueError, UnicodeError) as exc:
             refuse("receipt_reader_failed", f"{type(exc).__name__}: {exc}")
 
+    def check_root(self, directory: str) -> str:
+        """Stage 1's directory checks on ``directory`` (the ledger-hooks plugin root); its resolved path."""
+        try:
+            return self._check_root(directory)
+        except Refusal:
+            raise
+        except (OSError, ValueError, UnicodeError) as exc:
+            refuse("receipt_reader_failed", f"{type(exc).__name__}: {exc}")
+
+    def _check_root(self, store: str) -> str:
+        """The lane, git and hand-back checks, then the temp and sandbox roots, by file identity."""
+        real = check_store(store)
+        real_id, real_chain = _store_identity(real, store)
+        _refuse_in_roots(self.temp_roots(), real_id, real_chain, store, "receipt_store_in_temp_root", "temp root")
+        _refuse_in_roots(
+            self.sandbox_roots(), real_id, real_chain, store,
+            "receipt_store_in_sandbox_root", "Claude sandbox write root",
+        )
+        return real
+
     def _check(self, paths: DatabasePaths) -> str:
         database = getattr(paths, "database", None)
         documents = getattr(paths, "documents", None)
@@ -474,13 +494,7 @@ class StoreCheck:
         store = os.path.dirname(database)
         if os.path.dirname(documents) != store or os.path.basename(documents) in ("", ".", ".."):
             refuse("receipt_store_documents_invalid", f"{documents} is not beside {database}")
-        real = check_store(store)
-        real_id, real_chain = _store_identity(real, store)
-        _refuse_in_roots(self.temp_roots(), real_id, real_chain, store, "receipt_store_in_temp_root", "temp root")
-        _refuse_in_roots(
-            self.sandbox_roots(), real_id, real_chain, store,
-            "receipt_store_in_sandbox_root", "Claude sandbox write root",
-        )
+        real = self._check_root(store)
         base = os.path.join(real, name)
         _check_file(base, store, required=True)
         for suffix in ("-wal", "-shm"):

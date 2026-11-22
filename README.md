@@ -4,18 +4,21 @@ A head-pinned merge command for GitHub pull requests. It merges a pull request o
 head it is given, only when every stage below passes on review records and live GitHub reads, and
 it never reads the pull request body as an input.
 
-**Status: this release never merges.** The stages that need the ledger (3 to 7, and the records
-behind the grants and the write-ahead record) are calls on a records port, and the port this release
-ships is unfilled: every call on it refuses `records_unavailable`, so the command refuses every pull
-request at stage 1. Nothing on the command line or in the environment selects another port. The
-ledger-backed port (the reader for stages 3 to 7, the receipt writer and `review import`) comes in a
-later release, built on the ledger library from the ledger-hooks plugin.
+**Status: ledger-backed merges and recovery.** Set `LEDGER_DB` to an absolute database file;
+unset or empty refuses `records_unavailable`, and a relative spelling refuses `ledger_db_relative`.
+The variable names a file, never policy. The runtime loads ledger v0.6.1 from the ledger-hooks
+plugin root on `PYTHONPATH`, not from a checkout-local `ledger/` or a vendored copy. The plugin
+root is an absolute `PYTHONPATH` entry (or its `plugins/ledger-hooks`), never the current directory
+or `sys.path[0]`, and it must pass stage 1's directory checks (git trees, lane roots, temp roots,
+sandbox write roots) before anything in it is read or imported. No database opens before stage 1 admission;
+read stages use fresh read-only connections. The receipt writer and `review import` are not included.
 
 ## Usage
 
 ```sh
 review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
 python3 -m review_gate merge ...
+review-gate recover <PR URL> <full head sha> --items ID[,ID...]
 ```
 
 - `<PR URL>` is `https://github.com/<owner>/<repo>/pull/<N>`, matched whole: no trailing slash, no
@@ -55,6 +58,33 @@ They run in this order, and the first refusal stops the run.
 
 The module docstrings carry each stage's full rules and refusal names.
 
+## Record rules and recovery
+
+Two deciding receipts from distinct lanes are required. Only reserved `review.receipt` events
+count, bound to repository, pull request, head and files digest. Every inline receipt document
+is verified by the ledger, not parsed as authority. Newest per lane/round/head supersedes older
+events; only the highest round per lane decides. Approved and changes-requested receipts count;
+an empty changes request refuses. Crashed and unparseable newest rounds never fall back.
+Block findings each need their own standing waiver, harden findings each need an exact-source
+child outside `--items`, and counted rounds past three need a standing grant or a current cite.
+
+The database's adjacent `config.json` may set `"review_second_family": "anthropic"` (also
+`openai` or `google`). It can only add a family requirement. A malformed, unreadable or symlinked
+file refuses. Model families are derived from anchored provider/model forms in `ledger_records.py`;
+unknown models never satisfy this requirement. A standing head-bound exception can lift it.
+
+Stage 11 commits `review.merge-intent` before invoking GitHub and records `review.merge-done`
+only after confirming MERGED at the supplied head. Both records contain key, pull request and
+head; ledger v0.6.1 has no merge-commit field. The commit remains on GitHub and stdout.
+Closing an already closed item is a no-op; close failures can be retried through `recover`.
+
+`recover` never merges. After grammar and store admission it resolves the current item and
+requires a live MERGED read at the pinned head. Started writes done, then closes the items;
+finished only closes; absent refuses `merge_intent_missing`. A crash after intent while the
+pull request remains open refuses `merge_intent_unreconciled` on every retry: merge by hand
+then recover, or review a new head. There is no reset-to-absent operation.
+
+
 ## Residual risks
 
 - GitHub's merge call takes an expected head and no expected base. A retarget, a default-branch
@@ -63,9 +93,14 @@ The module docstrings carry each stage's full rules and refusal names.
   the runs stage 8 counted, and the draft flag reads the same in both state reads.
 - The main-tree proof reader checks the marker step's grammar and conclusion only; it does not check
   that the head or the run the marker names is the one the proof was made for.
-- A run that wrote the write-ahead intent and was interrupted after GitHub merged leaves the item
-  `started`. A rerun refuses at stage 2 (`pr_not_open`) before stage 11 can reconcile it; until the
-  records release adds a recovery path, the finished record is written by hand.
+- A grant withdrawn or a new receipt written after the final recheck and before the merge is not seen.
+- A second item linking the pull request after intent makes later writes refuse `pr_item_ambiguous`;
+  links cannot be removed through this command.
+- Tier is not judged against the change: a lighter-tier receipt counts for any change. No tier or
+  path lowers a requirement. Settlement-bearing receipts refuse `receipt_settlement_unsupported`
+  until document-derived settlements ship with the writer/importer.
+- The adjacent family configuration is not an owner-authenticated record. Picker capture is defended
+  by an external rail, not by the ledger against an in-process caller.
 - Case and Unicode spellings of a lane root are compared by file identity, which only matters on a
   case-insensitive filesystem such as macOS. The hosted CI runs on Linux, so those cases are proved
   by a macOS run of the store tests, not by CI.
@@ -76,6 +111,7 @@ The module docstrings carry each stage's full rules and refusal names.
 
 ```sh
 python3 -m pip install pytest PyYAML
+python3 -m pip install 'ledger @ git+https://github.com/smithadifd/ledger.git@v0.6.1'
 python3 -m pytest -q -p no:cacheprovider
 python3 -I scripts/check-no-person.py
 ```
