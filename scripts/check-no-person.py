@@ -15,6 +15,8 @@ tag, so the scan covers it as well as the tree:
   its message, author and committer identities (name and email), and every
   path and blob in its tree. Blob bytes are read once per object id; rules
   and allowances are applied separately for each path that names the blob.
+  Path/blob pairs already scanned in the index are not scanned again in
+  history; staged changes do not hide the committed HEAD tree.
 
 Rules, over every line:
 
@@ -43,11 +45,17 @@ Output, one line per hit, never the matched text and never the variable:
 matched nothing, ``<path>: unreadable (<reason>)`` and ``no-person:
 <reason>`` for a configuration failure.
 
+Historical names matching the deny list or a secret shape are shown as
+``commit <sha12>: historical path (redacted)`` instead of the name.
+
 NO_PERSON_DENY unset or empty: in CI (``CI=true`` or ``GITHUB_ACTIONS=true``)
 that is a failure, since the pattern list is missing; elsewhere the shape
 rules still run and one WARN line says the deny list did not run. An
 expression that does not compile, or that matches the empty string, is a
 failure everywhere.
+
+A shallow repository refuses ``history_shallow``: fetch the full history
+before running the scan.
 
 Exit 0 with one ``no-person: ok`` line when no rule fires; exit 1 on any
 hit, a stale allowance row, an unreadable file, a configuration failure or a
@@ -176,6 +184,8 @@ def read_objects(root: Path, ids: list, kind: str) -> dict:
 
 def history(root: Path) -> list:
     """(sha, author, committer, message) of every commit reachable from HEAD, newest first."""
+    if git(["rev-parse", "--is-shallow-repository"], root).strip() == b"true":
+        raise CheckError("history_shallow: full history is required")
     ids = git(["rev-list", "HEAD"], root).decode("ascii").split()
     if not ids or any(_OID.fullmatch(each) is None for each in ids):
         raise CheckError("git rev-list HEAD named no commit")
@@ -310,8 +320,11 @@ def scan_history(commits: list, deny, allowed: dict, used: set) -> list:
     return hits
 
 
-def scan_historical_blobs(root: Path, commits: list, blobs: dict, deny, allowed: dict, used: set) -> list:
-    """Read each historical blob once, retaining its paths for path-scoped allowances."""
+def scan_historical_blobs(root: Path, commits: list, entries: list, blobs: dict,
+                          deny, allowed: dict, used: set) -> list:
+    """Scan historical path/blob pairs not already scanned in the index."""
+    scanned = {(path, "commit" if mode == "160000" else "blob", oid)
+               for path, mode, oid in entries}
     locations = {}
     for sha, _author, _committer, _message in commits:
         tree = git(["ls-tree", "-r", "-z", "--full-tree", sha], root)
@@ -321,19 +334,24 @@ def scan_historical_blobs(root: Path, commits: list, blobs: dict, deny, allowed:
             meta, name = record.split(b"\t", 1)
             _mode, kind, oid = meta.decode("ascii").split(" ")
             path = name.decode("utf-8", "surrogateescape")
+            if (path, kind, oid) in scanned:
+                continue
             locations.setdefault((kind, oid), {}).setdefault(path, sha)
     blobs.update(read_objects(
         root, [oid for kind, oid in locations if kind == "blob" and oid not in blobs], "blob",
     ))
     hits = []
     for (kind, oid), paths in locations.items():
-        for number, (path, sha) in enumerate(paths.items(), 1):
+        for path, sha in paths.items():
             prefix = f"commit {sha[:12]}: "
             denied_path = deny is not None and deny.search(path)
-            label = f"historical path #{number}" if denied_path else path
+            secret_rules = [name for name, pattern in SECRET_SHAPES if pattern.search(path)]
+            label = "historical path (redacted)" if denied_path or secret_rules else path
             for name, pattern in SHAPES:
                 if pattern.search(path):
                     hits.append(f"{prefix}{label}: path name: no-person shape: {name}")
+            for name in secret_rules:
+                hits.append(f"{prefix}{label}: path name: secret shape: {name}")
             if denied_path:
                 hits.append(f"{prefix}{label}: deny-list (path name)")
             if kind != "blob":
@@ -379,18 +397,24 @@ def check(root: Path, environ: dict) -> tuple:
         findings.extend(problems)
     used = set()
     for number, (path, mode, blob) in enumerate(entries, 1):
+        denied_path = deny is not None and deny.search(path)
+        secret_rules = [name for name, pattern in SECRET_SHAPES if pattern.search(path)]
+        label = f"tracked path #{number}" if denied_path or secret_rules else path
         for name, pattern in SHAPES:
             if pattern.search(path):
-                findings.append(f"{path}: path name: no-person shape: {name}")
-        if deny is not None and deny.search(path):
-            findings.append(f"tracked path #{number}: deny-list (path name)")
+                findings.append(f"{label}: path name: no-person shape: {name}")
+        for name in secret_rules:
+            findings.append(f"{label}: path name: secret shape: {name}")
+        if denied_path:
+            findings.append(f"{label}: deny-list (path name)")
         if mode == "160000":
-            findings.append(f"{path}: unreadable (a submodule entry, not a file)")
+            findings.append(f"{label}: unreadable (a submodule entry, not a file)")
             continue
-        findings.extend(scan_text(path, blobs[blob], deny, allowed, used))
+        for finding in scan_text(path, blobs[blob], deny, allowed, used):
+            findings.append(label + finding[len(path):])
     commits = history(root)
     findings.extend(scan_history(commits, deny, allowed, used))
-    findings.extend(scan_historical_blobs(root, commits, blobs, deny, allowed, used))
+    findings.extend(scan_historical_blobs(root, commits, entries, blobs, deny, allowed, used))
     if deny is not None:
         for pair, line in sorted(allowed.items(), key=lambda item: item[1]):
             if pair not in used:

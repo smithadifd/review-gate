@@ -86,7 +86,10 @@ refuses `pyyaml_missing`.
 This repository is public; CI runs on GitHub-hosted runners. Every job retains a condition that
 disables it if the repository becomes private. The no-person scan reads its person and owner words
 from the `NO_PERSON_DENY` secret and fails in CI when it is unset. It checks the index, commit metadata
-and every reachable historical blob, applying the same path-scoped allowances to file contents.
+and every reachable historical path and blob, applying the same path-scoped allowances to file contents.
+Index path/blob pairs are scanned only once; staged changes do not hide committed content. Names
+matching a token shape or the deny list are redacted in diagnostics. Shallow repositories refuse
+`history_shallow`; fetch the full history before running the scan locally.
 
 ## License
 

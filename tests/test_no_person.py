@@ -75,6 +75,18 @@ def test_a_planted_word_in_a_file_fails(tmp_path):
     assert code == 1
     assert "README.md:1: deny-list" in output
     assert WORD not in output.lower()
+    assert output.count("README.md:1: deny-list") == 1, "the index and HEAD were both scanned"
+
+
+def test_a_staged_cleanup_does_not_hide_the_head_blob(tmp_path):
+    repo = scratch(tmp_path, {"notes.md": f"made by {WORD.title()}\n"})
+    head = git(repo, "rev-parse", "HEAD").strip()
+    (repo / "notes.md").write_text("clean now\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    code, output = scan(repo)
+    assert code == 1, "the staged cleanup hid the reachable HEAD blob"
+    assert f"commit {head[:12]}: notes.md:1: deny-list" in output
+    assert WORD not in output.lower()
 
 
 def test_a_word_removed_from_the_tree_still_fails_in_history(tmp_path):
@@ -99,6 +111,100 @@ def test_a_planted_word_in_a_path_name_fails(tmp_path):
     code, output = scan(scratch(tmp_path, {f"docs/{WORD}.md": "x\n"}))
     assert code == 1
     assert "deny-list (path name)" in output
+
+
+def test_a_token_path_renamed_away_fails_without_printing_the_name(tmp_path):
+    token = "gh" + "p_" + "A" * 36
+    path = f"docs/{token}.md"
+    repo = scratch(tmp_path, {path: "clean contents\n"})
+    planted = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "mv", path, "docs/clean.md")
+    git(repo, "commit", "-q", "-m", "docs: rename")
+    code, output = scan(repo)
+    assert code == 1, "a historical token-shaped path was accepted"
+    name_was_redacted = token not in output
+    assert name_was_redacted, "the historical token-shaped name was printed"
+    assert f"commit {planted[:12]}: historical path (redacted): path name: secret shape: token" in output
+
+
+def test_a_current_token_path_fails_without_printing_the_name(tmp_path):
+    token = "gh" + "p_" + "A" * 36
+    code, output = scan(scratch(tmp_path, {f"docs/{token}.md": "clean contents\n"}))
+    assert code == 1, "a current token-shaped path was accepted"
+    name_was_redacted = token not in output
+    assert name_was_redacted, "the current token-shaped name was printed"
+    assert "tracked path #" in output and "path name: secret shape: token" in output
+
+
+def test_a_deny_list_path_renamed_away_fails_without_printing_the_name(tmp_path):
+    path = f"docs/{WORD}.md"
+    repo = scratch(tmp_path, {path: "clean contents\n"})
+    planted = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "mv", path, "docs/clean.md")
+    git(repo, "commit", "-q", "-m", "docs: rename")
+    code, output = scan(repo)
+    assert code == 1, "a historical deny-list path was accepted"
+    assert f"commit {planted[:12]}: historical path (redacted): deny-list (path name)" in output
+    assert WORD not in output.lower(), "the historical deny-list name was printed"
+
+
+def test_a_home_shaped_path_renamed_away_fails(tmp_path):
+    path = "docs/x-Us" + "ers-example.md"
+    repo = scratch(tmp_path, {path: "clean contents\n"})
+    planted = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "mv", path, "docs/clean.md")
+    git(repo, "commit", "-q", "-m", "docs: rename")
+    code, output = scan(repo)
+    assert code == 1, "a historical home-shaped path was accepted"
+    assert f"commit {planted[:12]}: {path}: path name: no-person shape: encoded home" in output
+
+
+@pytest.mark.parametrize("allow", [True, False])
+def test_a_historical_blob_uses_its_path_allowance(tmp_path, allow):
+    repo = scratch(tmp_path, {"notes.md": f"made by {WORD.title()}\n"})
+    planted = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "rm", "-q", "notes.md")
+    if allow:
+        row = f"notes.md\t{hashlib.sha256(WORD.encode()).hexdigest()}\tpublic attribution\n"
+        with open(repo / "scripts" / "no-person-allowance.tsv", "a", encoding="utf-8") as handle:
+            handle.write(row)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "docs: remove old content")
+    code, output = scan(repo)
+    if allow:
+        assert code == 0, "the historical path allowance was ignored: " + output
+        assert "stale allowance" not in output
+    else:
+        assert code == 1, "an unallowed historical blob was accepted"
+        assert f"commit {planted[:12]}: notes.md:1: deny-list" in output
+    assert WORD not in output.lower()
+
+
+def test_a_historical_submodule_refuses(tmp_path):
+    repo = scratch(tmp_path)
+    target = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{target},vendor/component")
+    git(repo, "commit", "-q", "-m", "chore: add component")
+    planted = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "update-index", "--force-remove", "vendor/component")
+    git(repo, "commit", "-q", "-m", "chore: drop component")
+    code, output = scan(repo)
+    assert code == 1, "a historical submodule was accepted"
+    assert f"commit {planted[:12]}: vendor/component: unreadable (a submodule entry, not a file)" in output
+
+
+def test_a_shallow_clone_refuses_without_accepting_hidden_history(tmp_path):
+    repo = scratch(tmp_path, {"notes.md": f"made by {WORD.title()}\n"})
+    (repo / "notes.md").write_text("clean now\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "docs: remove old content")
+    shallow = tmp_path / "shallow"
+    git(repo, "clone", "-q", "--depth", "1", repo.as_uri(), str(shallow))
+    assert git(shallow, "rev-parse", "--is-shallow-repository").strip() == "true"
+    code, output = scan(shallow)
+    assert code == 1, "a shallow clone was accepted without its hidden history"
+    assert "history_shallow: full history is required" in output
+    assert WORD not in output.lower()
 
 
 def test_a_planted_word_in_a_commit_message_fails(tmp_path):
@@ -205,7 +311,7 @@ def test_the_workflow_runs_the_scan_on_pull_requests_and_pushes_with_its_secret(
     assert env["NO_PERSON_DENY"] == "${{ secrets.NO_PERSON_DENY }}"
 
 
-def test_every_job_stays_off_while_the_repository_is_private():
+def test_every_job_requires_public_repository_visibility():
     doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     for name, job in doc["jobs"].items():
         assert job.get("if") == "${{ !github.event.repository.private }}", name

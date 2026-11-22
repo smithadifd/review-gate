@@ -48,7 +48,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Scan the tree, the commit messages and the commit identities
+      - name: Scan the index, historical blobs and paths, commit messages and identities
         env:
           NO_PERSON_DENY: ${{ secrets.NO_PERSON_DENY }}
         run: python3 -I scripts/check-no-person.py
