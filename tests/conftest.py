@@ -1,6 +1,7 @@
 import pytest
 
 from rig import Rig
+from ledger_rig import ledger_rig, plugin
 
 
 @pytest.fixture

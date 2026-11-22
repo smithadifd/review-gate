@@ -5,7 +5,6 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from ledger_rig import ledger_rig, plugin
 from rig import ITEM
 from test_ledger_records import corrupt_event, refused
 from review_gate.ledger_records import LedgerRecords

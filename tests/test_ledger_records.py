@@ -11,7 +11,6 @@ import sys
 
 import pytest
 
-from ledger_rig import ledger_rig, plugin
 from rig import ITEM, oid
 from review_gate.records import merge_key, waiver_grant_id, exception_grant_id, review_round_grant_id
 from review_gate.refusal import Refusal
