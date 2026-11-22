@@ -104,9 +104,13 @@ The item must already exist and link the pull request. With the ledger CLI, crea
 `ledger link <item> --rel pr --target <URL>`. Neither writer nor importer creates or links items.
 
 Import checks the admitted store's seven-column index, exact bytes, repository and number before
-writing. It checks all selected documents first, writes rounds and named siblings in dependency
-order, then reads the item back and requires its imported digest set for this store and pull request
-to equal the index's selected set. Imported receipts count exactly as live receipts. Each imported
+writing. A document whose digest the item already records for the same lane, round and head is
+already recorded, whether the writer or an earlier import recorded it and whatever `base` it was
+recorded with; it is skipped, not written again. Import checks every other selected document first,
+and refuses before the first write if the item records a receipt for this pull request that the index
+does not list. It then writes rounds and named siblings in dependency order, reads the item back and
+requires the pull request's recorded digest set, from any provenance, to equal the index's selected
+set. `imported_from` names the store as given. Imported receipts count exactly as live receipts. Each imported
 `base` is the merge base GitHub compare reported at import time; it is not what the review ran
 against. Import is not atomic across receipts: a stop can leave a partial import; an unchanged
 rerun completes it without repeating events. No document supplies grants, waivers, cites or items.

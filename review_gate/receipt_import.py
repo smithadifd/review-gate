@@ -93,6 +93,17 @@ def _documents(directory, pr, store_check):
     return ordered, outcomes
 
 
+def _recorded(events, pr):
+    """This pull request's receipts on the item, by slot (lane, round, head) and document digest."""
+    return {(e.payload["lane"], e.payload["round"], e.payload["head"], e.payload["doc_sha256"])
+            for e in events if (e.payload["repo"], e.payload["pr"]) == (pr.key, pr.number)}
+
+
+def _slot(row):
+    digest, _, derived = row
+    return (derived.fields["lane"], derived.fields["round"], derived.fields["head"], digest)
+
+
 def run(argv, *, records, gh, store_check, out, err):
     try:
         args = parse_import_args(argv)
@@ -102,39 +113,39 @@ def run(argv, *, records, gh, store_check, out, err):
             state = read_state(gh, args.pr)
             if (state["repository"].casefold(), state["number"]) != (args.pr.key, args.pr.number):
                 refuse("import_base_unresolved", "GitHub answered for another pull request")
+            events = lg.events(item_id=item, kind="review.receipt")
+            expected = {row[0] for row in documents}
+            # A digest already recorded for its slot is that document's receipt, whatever its
+            # provenance or recorded base: it is skipped, never written again or compared.
+            recorded = _recorded(events, args.pr)
+            pending = [row for row in documents if _slot(row) not in recorded]
             bases = {}
-            for _, _, derived in documents:
+            for _, _, derived in pending:
                 head = derived.fields["head"]
                 if head not in bases:
                     bases[head] = import_base(gh, args.pr, head, state["baseRefName"])
-            events = lg.events(item_id=item, kind="review.receipt")
             projected = list(events)
-            expected = {row[0] for row in documents}
-            existing = {e.payload["doc_sha256"] for e in events}
-            for digest, data, derived in documents:
+            for digest, data, derived in pending:
                 fields = prepare_receipt(derived, data, projected, base=bases[derived.fields["head"]],
                                          imported_from={"store": args.store, "sha256": digest})
                 if ledger_module("credscan").scan(json.dumps(fields).encode()):
                     refuse("receipt_credential_shape", "an imported field holds a credential shape")
-                if digest not in existing:
-                    synthetic = dict(fields, doc_sha256=digest)
-                    projected.append(SimpleNamespace(id=max((e.id for e in projected), default=0) + 1, payload=synthetic))
+                synthetic = dict(fields, doc_sha256=digest)
+                projected.append(SimpleNamespace(id=max((e.id for e in projected), default=0) + 1, payload=synthetic))
+            if {slot[3] for slot in recorded} - expected:
+                refuse("import_readback_mismatch",
+                       "the item records receipts for this pull request that the index does not list")
             written = 0
             try:
-                for digest, data, derived in documents:
+                for digest, data, derived in pending:
                     events = lg.events(item_id=item, kind="review.receipt")
                     fields = prepare_receipt(derived, data, events, base=bases[derived.fields["head"]],
                                              imported_from={"store": args.store, "sha256": digest})
                     append_receipt(lg, item, fields, data)
-                    written += digest not in existing
-                recorded = {
-                    e.payload["doc_sha256"]
-                    for e in lg.events(item_id=item, kind="review.receipt")
-                    if (e.payload["repo"], e.payload["pr"]) == (args.pr.key, args.pr.number)
-                    and e.payload.get("imported_from", {}).get("store") == args.store
-                }
-                if expected != recorded:
-                    refuse("import_readback_mismatch", "recorded import documents differ from the index")
+                    written += 1
+                readback = {slot[3] for slot in _recorded(lg.events(item_id=item, kind="review.receipt"), args.pr)}
+                if expected != readback:
+                    refuse("import_readback_mismatch", "recorded receipts differ from the index")
             except Exception:
                 if written:
                     refuse("import_partial", "some receipts were recorded; rerun the unchanged store")
