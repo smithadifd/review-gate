@@ -26,7 +26,7 @@ def document(r, **changes):
 
 def write(r, data):
     from review_gate.receipt_writer import write_receipt
-    return write_receipt(data, records=r.port, store_check=r.store.check)
+    return write_receipt(data, records=r.port, store_check=r.store.check).event
 
 
 def refused(r, name, data):
