@@ -1,0 +1,54 @@
+name: ci
+
+# The repository's own gates, on GitHub-hosted runners only. Every job carries
+# the condition below: this repository is public, so every job runs. If it
+# becomes private, the condition disables hosted jobs because private
+# repositories consume paid minutes; run the same gates locally instead.
+# No path filter: every pull request and every push to main runs every job.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (python ${{ matrix.python-version }})
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the test dependencies
+        run: python -m pip install pytest PyYAML
+      - name: Test suite
+        run: python -m pytest -q -p no:cacheprovider
+
+  # The tree and the whole history become public with the first tag, so the
+  # scan reads every commit reachable from the checked-out head (fetch-depth 0).
+  # Its person and owner words come only from the NO_PERSON_DENY secret; with
+  # the secret unset or empty the job fails.
+  no-person:
+    name: no-person scan
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan the index, historical blobs and paths, commit messages and identities
+        env:
+          NO_PERSON_DENY: ${{ secrets.NO_PERSON_DENY }}
+        run: python3 -I scripts/check-no-person.py
