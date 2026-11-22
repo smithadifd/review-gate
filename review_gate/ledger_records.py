@@ -1,4 +1,4 @@
-"""The v0.6.1 records port. Each call opens a fresh connection; no gate snapshot.
+"""The records port for the accepted ledger versions (ledger_runtime.SUPPORTED_VERSIONS). Each call opens a fresh connection; no gate snapshot.
 
 Receipt authority is the reserved event, not JSON in its verified document.
 Settlement-bearing events are unsupported until document-derived settlement
@@ -334,7 +334,7 @@ class LedgerRecords:
                 refuse("merge_intent_unreconciled", key)
 
     def write_finished(self, item, key, merge_commit):
-        # v0.6.1 stores only key/pr/head; GitHub and stdout retain the merge commit.
+        # Every accepted ledger version stores only key/pr/head; GitHub and stdout retain the merge commit.
         with self._open(write=True) as lg:
             result = ledger_module("receipts").write_merge_done(lg, item, self._merge_fields(key), harness="review-gate")
             if result.state != "finished":

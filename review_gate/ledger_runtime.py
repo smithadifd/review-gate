@@ -13,9 +13,11 @@ pass the directory checks stage 1 applies to the database's directory
 (``StoreCheck.check_root``): no git tree, hand-back, lane root or
 lane-writable root, no temp root and no sandbox write root, owned by the
 caller and not group or other writable. A refusal keeps the store check's
-name and names the plugin root. Then the manifest and the package must
-provide exactly v0.6.1. Nothing from a candidate root is read, imported or
-executed before it passes.
+name and names the plugin root. Then the manifest's version must be exactly
+one of ``SUPPORTED_VERSIONS`` (an exact set of strings, never a range or a
+prefix), and the imported package's ``__version__`` must equal the manifest's
+version exactly. Nothing from a candidate root is read, imported or executed
+before the manifest passes.
 
 The check is injectable as stage 1's is: the command uses
 ``StoreCheck.shipped()`` (the process environment and the shipped root
@@ -33,7 +35,14 @@ from pathlib import Path
 from .refusal import Refusal, refuse
 from .store import StoreCheck
 
-VERSION = "0.6.1"
+# The ledger-hooks versions whose receipt and merge-record schemas this command
+# was checked against. Exact strings only: a new version is added here, with a
+# CI matrix entry, once it has been checked.
+SUPPORTED_VERSIONS = frozenset({"0.6.1", "0.6.2", "0.6.3", "0.7.0"})
+
+
+def _accepted():
+    return ", ".join(sorted(SUPPORTED_VERSIONS))
 
 
 def _identity(path):
@@ -87,8 +96,9 @@ def load_ledger(check=None):
         metadata = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         refuse("ledger_plugin_invalid", "the ledger-hooks manifest is unreadable")
-    if metadata.get("name") != "ledger-hooks" or metadata.get("version") != VERSION:
-        refuse("ledger_version_unsupported", "ledger-hooks v0.6.1 is required")
+    version = metadata.get("version")
+    if metadata.get("name") != "ledger-hooks" or not isinstance(version, str) or version not in SUPPORTED_VERSIONS:
+        refuse("ledger_version_unsupported", f"ledger-hooks version must be one of {_accepted()}")
     package = root / "ledger"
     if package.is_symlink() or package.resolve() != package or not (package / "__init__.py").is_file():
         refuse("ledger_plugin_invalid", "the plugin ledger package must be local to its root")
@@ -108,8 +118,9 @@ def load_ledger(check=None):
         except BaseException:
             del sys.modules["ledger"]
             raise
-    if module.__version__ != VERSION:
-        refuse("ledger_version_unsupported", "ledger v0.6.1 is required")
+    if module.__version__ != version:
+        refuse("ledger_version_unsupported",
+               f"the ledger package version must equal the manifest's {version}")
     return module
 
 

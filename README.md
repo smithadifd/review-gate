@@ -4,9 +4,24 @@ A head-pinned merge command for GitHub pull requests. It merges a pull request o
 head it is given, only when every stage below passes on review records and live GitHub reads, and
 it never reads the pull request body as an input.
 
+## Install
+
+review-gate is a Python command, not a Claude plugin, so it has no marketplace entry. Install the
+pinned release with pip:
+
+```sh
+python3 -m pip install 'review-gate @ git+https://github.com/smithadifd/review-gate.git@v0.2.0'
+```
+
+It reads the ledger through the ledger-hooks plugin that the public harness default installs; put
+that plugin's root on `PYTHONPATH` as an absolute entry (see Status below). The accepted ledger-hooks
+versions are exactly `0.6.1`, `0.6.2`, `0.6.3` and `0.7.0`. The manifest's version must be one of
+them, and the imported ledger package must report the same version as the manifest; any other
+version, a range or a prefix refuses `ledger_version_unsupported`.
+
 **Status: ledger-backed merges and recovery.** Set `LEDGER_DB` to an absolute database file;
 unset or empty refuses `records_unavailable`, and a relative spelling refuses `ledger_db_relative`.
-The variable names a file, never policy. The runtime loads ledger v0.6.1 from the ledger-hooks
+The variable names a file, never policy. The runtime loads ledger (one of the accepted ledger-hooks versions, below) from the ledger-hooks
 plugin root on `PYTHONPATH`, not from a checkout-local `ledger/` or a vendored copy. The plugin
 root is an absolute `PYTHONPATH` entry (or its `plugins/ledger-hooks`), never the current directory
 or `sys.path[0]`, and it must pass stage 1's directory checks (git trees, lane roots, temp roots,
@@ -78,7 +93,7 @@ unknown models never satisfy this requirement. A standing head-bound exception c
 
 Stage 11 commits `review.merge-intent` before invoking GitHub and records `review.merge-done`
 only after confirming MERGED at the supplied head. Both records contain key, pull request and
-head; ledger v0.6.1 has no merge-commit field. The commit remains on GitHub and stdout.
+head; no accepted ledger version has a merge-commit field. The commit remains on GitHub and stdout.
 Closing an already closed item is a no-op; close failures can be retried through `recover`.
 
 `recover` never merges. After grammar and store admission it resolves the current item and
@@ -181,10 +196,13 @@ record in a deciding slot refuses rather than dropping findings on a sibling's w
 
 ```sh
 python3 -m pip install pytest PyYAML
-python3 -m pip install 'ledger @ git+https://github.com/smithadifd/ledger.git@v0.6.1'
+python3 -m pip install 'ledger @ git+https://github.com/smithadifd/ledger.git@v0.7.0'
 python3 -m pytest -q -p no:cacheprovider
 python3 -I scripts/check-no-person.py
 ```
+
+The ledger line installs one of the accepted versions; the suite runs unchanged against any of them, and
+CI runs it once per accepted version.
 
 The runtime needs Python 3.11 or later, `gh` on `PATH`, and PyYAML; without PyYAML the command
 refuses `pyyaml_missing`.

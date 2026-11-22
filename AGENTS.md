@@ -11,5 +11,5 @@ Release class: versioned — cut by hand (a `chore(release): vX.Y.Z` pull reques
 ## Rules for working in this repo
 
 - The version source is `pyproject.toml`. `CHANGELOG.md` holds one dated section per version, newest first.
-- Tests run with the pinned ledger (v0.6.1) installed, as `.github/workflows/ci.yml` does.
+- Tests run with one accepted ledger version (0.6.1, 0.6.2, 0.6.3 or 0.7.0) installed; `.github/workflows/ci.yml` runs each.
 - The merge command never reads the pull request body as an input. Keep it that way.

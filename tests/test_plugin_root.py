@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from ledger_rig import plugin_check_for
+from ledger_rig import installed_version, plugin_check_for
 from rig import Repo, make_store, write_roots
 from test_ledger_records import refused
 from review_gate.ledger_runtime import load_ledger
@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def plant(directory, marker):
-    """A directory that looks like a ledger-hooks v0.6.1 root whose ledger package records that it ran."""
+    """A directory that looks like a ledger-hooks root whose ledger package records that it ran."""
     (directory / ".claude-plugin").mkdir(parents=True)
     (directory / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "ledger-hooks", "version": "0.6.1"}))
     (directory / "ledger").mkdir()
@@ -34,11 +34,11 @@ def plant(directory, marker):
 
 
 def copy_plugin(directory):
-    """A ledger-hooks v0.6.1 root holding the pinned ledger, built without the session plugin fixture."""
+    """A ledger-hooks root holding the installed ledger, built without the session plugin fixture."""
     source = Path(importlib.util.find_spec("ledger").origin).parent
     shutil.copytree(source, directory / "ledger", ignore=shutil.ignore_patterns("__pycache__", "tests"))
     (directory / ".claude-plugin").mkdir()
-    (directory / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "ledger-hooks", "version": "0.6.1"}))
+    (directory / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "ledger-hooks", "version": installed_version(source)}))
     return directory
 
 
