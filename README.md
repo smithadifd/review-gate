@@ -85,11 +85,21 @@ refuses `pyyaml_missing`.
 
 This repository is public; CI runs on GitHub-hosted runners. Every job retains a condition that
 disables it if the repository becomes private. The no-person scan reads its person and owner words
-from the `NO_PERSON_DENY` secret and fails in CI when it is unset. It checks the index, commit metadata
-and every reachable historical path and blob, applying the same path-scoped allowances to file contents.
-Index path/blob pairs are scanned only once; staged changes do not hide committed content. Names
-matching a token shape or the deny list are redacted in diagnostics. Shallow repositories refuse
-`history_shallow`; fetch the full history before running the scan locally.
+from the `NO_PERSON_DENY` secret and fails in CI when it is unset. It checks the index and history.
+History means commits reachable from HEAD: their message, author, committer, paths and blobs;
+not read: tag objects, other refs, commit header fields other than author and committer, and bytes
+that are not UTF-8 text lines. The same path-scoped allowances apply to file contents.
+Index path/blob pairs are scanned only once; staged changes do not hide committed content.
+Whenever any name rule fires (shape, secret or deny), every finding under that name uses a hidden label:
+
+- Index: `tracked path #<n>: path name: <rule>`, `tracked path #<n>: deny-list (path name)`,
+  `tracked path #<n>:<line>: <rule>` or `tracked path #<n>: unreadable (<reason>)`.
+- History: `commit <sha12>: historical path (redacted): path name: <rule>`,
+  `commit <sha12>: historical path (redacted): deny-list (path name)`,
+  `commit <sha12>: historical path (redacted):<line>: <rule>` or
+  `commit <sha12>: historical path (redacted): unreadable (<reason>)`.
+
+Shallow repositories refuse `history_shallow`; fetch the full history before running the scan locally.
 
 ## License
 

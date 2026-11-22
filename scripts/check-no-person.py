@@ -5,8 +5,10 @@ Usage: check-no-person.py
 
 The repository checked is the one that holds this script (the folder above
 ``scripts/``), whatever the working directory; it must be the top of a git
-work tree. There are no options. The history becomes public with the first
-tag, so the scan covers it as well as the tree:
+work tree. There are no options. History means commits reachable from HEAD:
+their message, author, committer, paths and blobs; not read: tag objects,
+other refs, commit header fields other than author and committer, and bytes
+that are not UTF-8 text lines.
 
 - the tree: every tracked file, read from the git index (its staged blob,
   which is the checked-out commit in CI), binary files included, and every
@@ -37,16 +39,25 @@ Rules, over every line:
   sha256 (``LICENSE_HOLDER_SHA256``), is exempt from the deny list, once.
 
 Output, one line per hit, never the matched text and never the variable:
-``<path>:<line>: <rule>``, ``<path>: path name: <rule>``, ``tracked path
-#<n>: deny-list (path name)``, ``commit <sha12>: message line <n>: <rule>``,
-``commit <sha12>: author: <rule>``, ``commit <sha12>: committer: <rule>`` or
-``commit <sha12>: <path>:<line>: <rule>`` for historical file contents,
+``<path>:<line>: <rule>``, ``<path>: path name: <rule>``,
+``commit <sha12>: message line <n>: <rule>``, ``commit <sha12>: author:
+<rule>``, ``commit <sha12>: committer: <rule>`` or ``commit <sha12>:
+<path>:<line>: <rule>`` for historical file contents,
 ``scripts/no-person-allowance.tsv:<line>: stale allowance`` for a row that
 matched nothing, ``<path>: unreadable (<reason>)`` and ``no-person:
 <reason>`` for a configuration failure.
 
-Historical names matching the deny list or a secret shape are shown as
-``commit <sha12>: historical path (redacted)`` instead of the name.
+Whenever any name rule fires (shape, secret or deny), the name is hidden
+on every finding for that entry. Hidden-name output forms in the index:
+``tracked path #<n>: path name: <rule>``,
+``tracked path #<n>: deny-list (path name)``,
+``tracked path #<n>:<line>: <rule>`` and
+``tracked path #<n>: unreadable (<reason>)``.
+In history the forms are:
+``commit <sha12>: historical path (redacted): path name: <rule>``,
+``commit <sha12>: historical path (redacted): deny-list (path name)``,
+``commit <sha12>: historical path (redacted):<line>: <rule>`` and
+``commit <sha12>: historical path (redacted): unreadable (<reason>)``.
 
 NO_PERSON_DENY unset or empty: in CI (``CI=true`` or ``GITHUB_ACTIONS=true``)
 that is a failure, since the pattern list is missing; elsewhere the shape
@@ -320,6 +331,25 @@ def scan_history(commits: list, deny, allowed: dict, used: set) -> list:
     return hits
 
 
+def scan_entry(path: str, kind: str, data: bytes, location: str,
+               deny, allowed: dict, used: set) -> list:
+    """Apply every entry rule; location is a tracked ordinal or a commit label."""
+    name_rules = line_rules(path, deny, None, allowed, used)
+    prefix = f"{location}: " if location.startswith("commit ") else ""
+    hidden = f"{prefix}historical path (redacted)" if prefix else location
+    label = hidden if name_rules else prefix + path
+    hits = []
+    for rule in name_rules:
+        suffix = "deny-list (path name)" if rule == "deny-list" else f"path name: {rule}"
+        hits.append(f"{label}: {suffix}")
+    if kind != "blob":
+        hits.append(f"{label}: unreadable (a submodule entry, not a file)")
+        return hits
+    for finding in scan_text(path, data, deny, allowed, used):
+        hits.append(label + finding[len(path):])
+    return hits
+
+
 def scan_historical_blobs(root: Path, commits: list, entries: list, blobs: dict,
                           deny, allowed: dict, used: set) -> list:
     """Scan historical path/blob pairs not already scanned in the index."""
@@ -343,22 +373,8 @@ def scan_historical_blobs(root: Path, commits: list, entries: list, blobs: dict,
     hits = []
     for (kind, oid), paths in locations.items():
         for path, sha in paths.items():
-            prefix = f"commit {sha[:12]}: "
-            denied_path = deny is not None and deny.search(path)
-            secret_rules = [name for name, pattern in SECRET_SHAPES if pattern.search(path)]
-            label = "historical path (redacted)" if denied_path or secret_rules else path
-            for name, pattern in SHAPES:
-                if pattern.search(path):
-                    hits.append(f"{prefix}{label}: path name: no-person shape: {name}")
-            for name in secret_rules:
-                hits.append(f"{prefix}{label}: path name: secret shape: {name}")
-            if denied_path:
-                hits.append(f"{prefix}{label}: deny-list (path name)")
-            if kind != "blob":
-                hits.append(f"{prefix}{label}: unreadable (a submodule entry, not a file)")
-                continue
-            for finding in scan_text(path, blobs[oid], deny, allowed, used):
-                hits.append(prefix + label + finding[len(path):])
+            hits.extend(scan_entry(path, kind, blobs[oid] if kind == "blob" else b"", f"commit {sha[:12]}",
+                                   deny, allowed, used))
     return hits
 
 
@@ -397,21 +413,9 @@ def check(root: Path, environ: dict) -> tuple:
         findings.extend(problems)
     used = set()
     for number, (path, mode, blob) in enumerate(entries, 1):
-        denied_path = deny is not None and deny.search(path)
-        secret_rules = [name for name, pattern in SECRET_SHAPES if pattern.search(path)]
-        label = f"tracked path #{number}" if denied_path or secret_rules else path
-        for name, pattern in SHAPES:
-            if pattern.search(path):
-                findings.append(f"{label}: path name: no-person shape: {name}")
-        for name in secret_rules:
-            findings.append(f"{label}: path name: secret shape: {name}")
-        if denied_path:
-            findings.append(f"{label}: deny-list (path name)")
-        if mode == "160000":
-            findings.append(f"{label}: unreadable (a submodule entry, not a file)")
-            continue
-        for finding in scan_text(path, blobs[blob], deny, allowed, used):
-            findings.append(label + finding[len(path):])
+        kind = "commit" if mode == "160000" else "blob"
+        findings.extend(scan_entry(path, kind, blobs[blob] if kind == "blob" else b"", f"tracked path #{number}",
+                                   deny, allowed, used))
     commits = history(root)
     findings.extend(scan_history(commits, deny, allowed, used))
     findings.extend(scan_historical_blobs(root, commits, entries, blobs, deny, allowed, used))

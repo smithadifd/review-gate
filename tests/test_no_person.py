@@ -73,7 +73,7 @@ def test_a_clean_repository_passes(tmp_path):
 def test_a_planted_word_in_a_file_fails(tmp_path):
     code, output = scan(scratch(tmp_path, {"README.md": f"made by {WORD.title()}\n"}))
     assert code == 1
-    assert "README.md:1: deny-list" in output
+    assert "README.md:1: deny-list" in output.splitlines()
     assert WORD not in output.lower()
     assert output.count("README.md:1: deny-list") == 1, "the index and HEAD were both scanned"
 
@@ -85,7 +85,7 @@ def test_a_staged_cleanup_does_not_hide_the_head_blob(tmp_path):
     git(repo, "add", "-A")
     code, output = scan(repo)
     assert code == 1, "the staged cleanup hid the reachable HEAD blob"
-    assert f"commit {head[:12]}: notes.md:1: deny-list" in output
+    assert f"commit {head[:12]}: notes.md:1: deny-list" in output.splitlines()
     assert WORD not in output.lower()
 
 
@@ -97,7 +97,7 @@ def test_a_word_removed_from_the_tree_still_fails_in_history(tmp_path):
     git(repo, "commit", "-q", "-m", "docs: remove old content")
     code, output = scan(repo)
     assert code == 1, "reachable historical blob was accepted"
-    assert f"commit {planted[:12]}: notes.md:1: deny-list" in output
+    assert f"commit {planted[:12]}: notes.md:1: deny-list" in output.splitlines()
     assert WORD not in output.lower()
 
 
@@ -109,8 +109,10 @@ def test_a_planted_home_path_fails(tmp_path):
 
 def test_a_planted_word_in_a_path_name_fails(tmp_path):
     code, output = scan(scratch(tmp_path, {f"docs/{WORD}.md": "x\n"}))
-    assert code == 1
-    assert "deny-list (path name)" in output
+    assert code == 1, "a current deny-list path was accepted"
+    assert "tracked path #1: deny-list (path name)" in output.splitlines()
+    name_was_redacted = WORD not in output.lower()
+    assert name_was_redacted, "the current deny-list name was printed"
 
 
 def test_a_token_path_renamed_away_fails_without_printing_the_name(tmp_path):
@@ -124,7 +126,7 @@ def test_a_token_path_renamed_away_fails_without_printing_the_name(tmp_path):
     assert code == 1, "a historical token-shaped path was accepted"
     name_was_redacted = token not in output
     assert name_was_redacted, "the historical token-shaped name was printed"
-    assert f"commit {planted[:12]}: historical path (redacted): path name: secret shape: token" in output
+    assert f"commit {planted[:12]}: historical path (redacted): path name: secret shape: token" in output.splitlines()
 
 
 def test_a_current_token_path_fails_without_printing_the_name(tmp_path):
@@ -133,7 +135,7 @@ def test_a_current_token_path_fails_without_printing_the_name(tmp_path):
     assert code == 1, "a current token-shaped path was accepted"
     name_was_redacted = token not in output
     assert name_was_redacted, "the current token-shaped name was printed"
-    assert "tracked path #" in output and "path name: secret shape: token" in output
+    assert "tracked path #1: path name: secret shape: token" in output.splitlines()
 
 
 def test_a_deny_list_path_renamed_away_fails_without_printing_the_name(tmp_path):
@@ -144,8 +146,9 @@ def test_a_deny_list_path_renamed_away_fails_without_printing_the_name(tmp_path)
     git(repo, "commit", "-q", "-m", "docs: rename")
     code, output = scan(repo)
     assert code == 1, "a historical deny-list path was accepted"
-    assert f"commit {planted[:12]}: historical path (redacted): deny-list (path name)" in output
-    assert WORD not in output.lower(), "the historical deny-list name was printed"
+    assert f"commit {planted[:12]}: historical path (redacted): deny-list (path name)" in output.splitlines()
+    name_was_redacted = WORD not in output.lower()
+    assert name_was_redacted, "the historical deny-list name was printed"
 
 
 def test_a_home_shaped_path_renamed_away_fails(tmp_path):
@@ -156,7 +159,51 @@ def test_a_home_shaped_path_renamed_away_fails(tmp_path):
     git(repo, "commit", "-q", "-m", "docs: rename")
     code, output = scan(repo)
     assert code == 1, "a historical home-shaped path was accepted"
-    assert f"commit {planted[:12]}: {path}: path name: no-person shape: encoded home" in output
+    name_was_redacted = path not in output
+    assert name_was_redacted, "the historical home-shaped name was printed"
+    assert f"commit {planted[:12]}: historical path (redacted): path name: no-person shape: encoded home" in output.splitlines()
+
+
+def test_a_current_home_shaped_path_fails_without_printing_the_name(tmp_path):
+    path = "docs/x-Us" + "ers-example.md"
+    code, output = scan(scratch(tmp_path, {path: "clean contents\n"}))
+    assert code == 1, "a current home-shaped path was accepted"
+    name_was_redacted = path not in output
+    assert name_was_redacted, "the current home-shaped name was printed"
+    assert "tracked path #1: path name: no-person shape: encoded home" in output.splitlines()
+
+
+def test_a_current_submodule_refuses(tmp_path):
+    repo = scratch(tmp_path)
+    target = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{target},vendor/component")
+    git(repo, "commit", "-q", "-m", "chore: add component")
+    code, output = scan(repo)
+    assert code == 1, "a current submodule was accepted"
+    assert "vendor/component: unreadable (a submodule entry, not a file)" in output.splitlines()
+
+
+@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("name_rule", ["shape", "secret", "deny"])
+def test_content_findings_under_hidden_names_do_not_print_the_name(tmp_path, historical, name_rule):
+    names = {
+        "shape": "x-Us" + "ers-example",
+        "secret": "gh" + "p_" + "A" * 36,
+        "deny": WORD,
+    }
+    name = names[name_rule]
+    path = f"docs/{name}.md"
+    repo = scratch(tmp_path, {path: f"made by {WORD.title()}\n"})
+    planted = git(repo, "rev-parse", "HEAD").strip()
+    if historical:
+        git(repo, "rm", "-q", path)
+        git(repo, "commit", "-q", "-m", "docs: remove old content")
+    code, output = scan(repo)
+    assert code == 1, "content under a hidden name was accepted"
+    name_was_redacted = name.lower() not in output.lower()
+    assert name_was_redacted, "a hidden name was printed on a content line"
+    label = f"commit {planted[:12]}: historical path (redacted)" if historical else "tracked path #1"
+    assert f"{label}:1: deny-list" in output.splitlines()
 
 
 @pytest.mark.parametrize("allow", [True, False])
@@ -176,7 +223,7 @@ def test_a_historical_blob_uses_its_path_allowance(tmp_path, allow):
         assert "stale allowance" not in output
     else:
         assert code == 1, "an unallowed historical blob was accepted"
-        assert f"commit {planted[:12]}: notes.md:1: deny-list" in output
+        assert f"commit {planted[:12]}: notes.md:1: deny-list" in output.splitlines()
     assert WORD not in output.lower()
 
 
@@ -190,7 +237,7 @@ def test_a_historical_submodule_refuses(tmp_path):
     git(repo, "commit", "-q", "-m", "chore: drop component")
     code, output = scan(repo)
     assert code == 1, "a historical submodule was accepted"
-    assert f"commit {planted[:12]}: vendor/component: unreadable (a submodule entry, not a file)" in output
+    assert f"commit {planted[:12]}: vendor/component: unreadable (a submodule entry, not a file)" in output.splitlines()
 
 
 def test_a_shallow_clone_refuses_without_accepting_hidden_history(tmp_path):

@@ -105,6 +105,18 @@ def test_an_unreadable_settings_file_refuses(tmp_path):
     assert refused(store).name == "receipt_store_lane_writable"
 
 
+def test_an_unopenable_lane_registry_refuses(tmp_path):
+    store = make_store(tmp_path)
+    (Path(os.path.realpath(tmp_path)) / "lane-roots.tsv").mkdir()
+    assert refused(store).name == "receipt_store_in_lane_root"
+
+
+def test_an_unopenable_settings_file_refuses_by_the_store_reason(tmp_path):
+    store = make_store(tmp_path)
+    (Path(os.path.realpath(tmp_path)) / "lane.settings.json").mkdir()
+    assert refused(store).name == "receipt_store_lane_writable"
+
+
 def test_a_store_under_a_handback_directory_refuses(tmp_path):
     base = Path(os.path.realpath(tmp_path)) / "handback-row"
     base.mkdir()
