@@ -3,16 +3,18 @@
 The current directory and sys.path[0] are never a plugin root, and nothing in
 a candidate root runs before it passes.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
 import pytest
 
 from ledger_rig import plugin_check_for
-from rig import write_roots
+from rig import Repo, make_store, write_roots
 from test_ledger_records import refused
 from review_gate.ledger_runtime import load_ledger
 from review_gate.refusal import Refusal
@@ -31,6 +33,15 @@ def plant(directory, marker):
     return directory
 
 
+def copy_plugin(directory):
+    """A ledger-hooks v0.6.1 root holding the pinned ledger, built without the session plugin fixture."""
+    source = Path(importlib.util.find_spec("ledger").origin).parent
+    shutil.copytree(source, directory / "ledger", ignore=shutil.ignore_patterns("__pycache__", "tests"))
+    (directory / ".claude-plugin").mkdir()
+    (directory / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "ledger-hooks", "version": "0.6.1"}))
+    return directory
+
+
 def refused_root(name, check, plugin):
     with pytest.raises(Refusal) as exc:
         load_ledger(check)
@@ -38,20 +49,20 @@ def refused_root(name, check, plugin):
     assert exc.value.detail.startswith(f"ledger-hooks plugin root {plugin} "), exc.value.line()
 
 
-def test_planted_plugin_in_working_directory_never_executes(ledger_rig, tmp_path):
+def test_planted_plugin_in_working_directory_never_executes(tmp_path):
     # The review's probe: python3 -m review_gate puts the working directory at sys.path[0],
-    # with the real plugin on PYTHONPATH.
-    r = ledger_rig
+    # with the real plugin on PYTHONPATH. No session fixture: this runs the shipped command only.
+    plugin = copy_plugin(tmp_path / "plugin")
     marker = tmp_path / "planted-ran"
     probe = plant(tmp_path / "probe", marker)
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(ROOT), str(r.plugin)]),
-               LEDGER_DB=str(r.db), PYTHONDONTWRITEBYTECODE="1")
-    done = subprocess.run([sys.executable, "-m", "review_gate", *r.repo.argv()],
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(ROOT), str(plugin)]),
+               LEDGER_DB=str(tmp_path / "store" / "ledger.db"), PYTHONDONTWRITEBYTECODE="1")
+    done = subprocess.run([sys.executable, "-m", "review_gate", *Repo().argv()],
                           cwd=probe, env=env, capture_output=True, text=True)
     assert not marker.exists(), "a plugin planted in the working directory executed"
     assert done.returncode == 2, done.stderr
     # The real plugin root sits under the platform temp root here, so it refuses by name first.
-    assert done.stderr.startswith(f"receipt_store_in_temp_root: ledger-hooks plugin root {r.plugin} "), done.stderr
+    assert done.stderr.startswith(f"receipt_store_in_temp_root: ledger-hooks plugin root {plugin} "), done.stderr
 
 
 @pytest.mark.parametrize("layout", ["root", "plugins", "nested"])
@@ -87,11 +98,13 @@ def test_a_relative_pythonpath_entry_is_never_resolved(ledger_rig, monkeypatch):
     refused("ledger_plugin_missing", load_ledger, plugin_check_for(r.plugin_check, r.plugin.name))
 
 
-def test_a_plugin_only_on_sys_path_is_not_a_candidate(ledger_rig, monkeypatch):
+def test_a_plugin_only_on_sys_path_is_not_a_candidate(tmp_path, monkeypatch):
     # PYTHONPATH locates the plugin; an entry that is only on sys.path is never a root.
-    r = ledger_rig
-    monkeypatch.setattr(sys, "path", [*sys.path[:1], str(r.plugin), *sys.path[1:]])
-    refused("ledger_plugin_missing", load_ledger, plugin_check_for(r.plugin_check))
+    # No session fixture: it would itself load through the scan this test guards.
+    plugin = copy_plugin(tmp_path / "plugin")
+    monkeypatch.setattr(sys, "path", [*sys.path[:1], str(plugin), *sys.path[1:]])
+    monkeypatch.delitem(sys.modules, "ledger", raising=False)
+    refused("ledger_plugin_missing", load_ledger, plugin_check_for(make_store(tmp_path).check))
 
 
 @pytest.mark.parametrize("where", ["listed", "TMPDIR", "gettempdir"])
