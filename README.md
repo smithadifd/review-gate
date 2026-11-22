@@ -7,8 +7,10 @@ it never reads the pull request body as an input.
 **Status: ledger-backed merges and recovery.** Set `LEDGER_DB` to an absolute database file;
 unset or empty refuses `records_unavailable`, and a relative spelling refuses `ledger_db_relative`.
 The variable names a file, never policy. The runtime loads ledger v0.6.1 from the ledger-hooks
-plugin root on `PYTHONPATH`, not from a checkout-local `ledger/` or a vendored copy. Plugin roots
-inside git trees or lane roots refuse before import. No database opens before stage 1 admission;
+plugin root on `PYTHONPATH`, not from a checkout-local `ledger/` or a vendored copy. The plugin
+root is an absolute `PYTHONPATH` entry (or its `plugins/ledger-hooks`), never the current directory
+or `sys.path[0]`, and it must pass stage 1's directory checks (git trees, lane roots, temp roots,
+sandbox write roots) before anything in it is read or imported. No database opens before stage 1 admission;
 read stages use fresh read-only connections. The receipt writer and `review import` are not included.
 
 ## Usage

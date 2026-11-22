@@ -6,19 +6,19 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from rig import ITEM
+from ledger_rig import plugin_check_for
 from test_ledger_records import corrupt_event, refused
 from review_gate.ledger_records import LedgerRecords
 from review_gate.ledger_runtime import load_ledger
 from review_gate.records import merge_key
 
 
-def test_missing_plugin_refuses(plugin, monkeypatch):
-    monkeypatch.setattr(sys, "path", [])
-    refused("ledger_plugin_missing", load_ledger)
+def test_missing_plugin_refuses(plugin_check):
+    refused("ledger_plugin_missing", load_ledger, plugin_check_for(plugin_check))
 
 
 @pytest.mark.parametrize("damage", ["manifest", "package"])
-def test_invalid_plugin_refuses(plugin, tmp_path, monkeypatch, damage):
+def test_invalid_plugin_refuses(plugin, plugin_check, tmp_path, damage):
     root = tmp_path / "invalid-plugin"
     metadata = root / ".claude-plugin"
     metadata.mkdir(parents=True)
@@ -28,8 +28,7 @@ def test_invalid_plugin_refuses(plugin, tmp_path, monkeypatch, damage):
     else:
         manifest.write_text('{"name":"ledger-hooks","version":"0.6.1"}')
         (root / "ledger").symlink_to(plugin / "ledger", target_is_directory=True)
-    monkeypatch.setattr(sys, "path", [str(root)])
-    refused("ledger_plugin_invalid", load_ledger)
+    refused("ledger_plugin_invalid", load_ledger, plugin_check_for(plugin_check, root))
 
 
 def test_preimported_checkout_ledger_refuses(ledger_rig, tmp_path, monkeypatch):
@@ -41,20 +40,20 @@ def test_preimported_checkout_ledger_refuses(ledger_rig, tmp_path, monkeypatch):
     foreign.__file__ = str(source)
     foreign.__version__ = "0.6.1"
     monkeypatch.setitem(sys.modules, "ledger", foreign)
-    refused("ledger_origin_invalid", load_ledger)
+    refused("ledger_origin_invalid", load_ledger, ledger_rig.plugin_check)
 
 
 def test_invalid_database_symlink_refuses(ledger_rig, tmp_path):
     link = tmp_path / "linked.db"
     link.symlink_to(ledger_rig.db)
-    port = LedgerRecords(str(link))
+    port = LedgerRecords(str(link), plugin_check=ledger_rig.plugin_check)
     refused("ledger_db_invalid", port.database_paths)
     assert port.paths is None
 
 
 def test_relative_database_never_reaches_ledger(ledger_rig, monkeypatch):
     import review_gate.ledger_records as records
-    def unexpected_load():
+    def unexpected_load(*args):
         pytest.fail("relative database reached ledger loading or path resolution")
     monkeypatch.setattr(records, "load_ledger", unexpected_load)
     refused("ledger_db_relative", LedgerRecords("relative.db").database_paths)

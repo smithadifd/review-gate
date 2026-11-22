@@ -38,8 +38,10 @@ def _identity(event):
 
 
 class LedgerRecords:
-    def __init__(self, database):
+    def __init__(self, database, *, plugin_check=None):
+        # plugin_check: the StoreCheck the plugin root must pass; None is the shipped one.
         self.given = database
+        self.plugin_check = plugin_check
         self.paths = None
         self.ledger = None
 
@@ -47,7 +49,7 @@ class LedgerRecords:
         if self.paths is None:
             if not isinstance(self.given, str) or not Path(self.given).is_absolute():
                 refuse("ledger_db_relative", "LEDGER_DB must name an absolute database file")
-            self.ledger = load_ledger()
+            self.ledger = load_ledger(self.plugin_check)
             try:
                 database = self.ledger.resolve_db_path(self.given)
             except Exception as exc:

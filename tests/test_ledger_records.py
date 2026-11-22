@@ -42,7 +42,7 @@ def test_paths_open_nothing_and_missing_database_stays_missing(ledger_rig, monke
     from ledger.verbs.doc import document_root
     from review_gate.ledger_records import LedgerRecords
     path = r.db.parent / "missing.db"
-    p = LedgerRecords(str(path))
+    p = LedgerRecords(str(path), plugin_check=r.plugin_check)
     paths = p.database_paths()
     assert paths.database == str(resolve_db_path(path))
     assert paths.documents == document_root(resolve_db_path(path)).path
@@ -193,6 +193,20 @@ def test_round_cap_covers_earlier_heads_and_exact_pr(ledger_rig):
     r.pair()
     r.grant(review_round_grant_id(r.subject.repo, 70, 4))
     refused("review_round_not_granted", r.port.round_cap, r.subject, ITEM)
+    r.grant(review_round_grant_id(r.subject.repo, 7, 5))
+    assert r.port.round_cap(r.subject, ITEM)
+
+
+def test_a_lower_round_grant_never_lifts_a_later_round(ledger_rig):
+    # Five rounds in one lane and only an r4 grant: round 5 stays past the cap.
+    r = ledger_rig
+    prior = None
+    for n in range(1, 6):
+        prior = r.receipt(round_=n, **({} if prior is None else {"prior_receipt": prior.id}))
+    r.grant(review_round_grant_id(r.subject.repo, 7, 4))
+    with pytest.raises(Refusal) as exc:
+        r.port.round_cap(r.subject, ITEM)
+    assert (exc.value.name, exc.value.detail) == ("review_round_not_granted", "5"), exc.value.line()
     r.grant(review_round_grant_id(r.subject.repo, 7, 5))
     assert r.port.round_cap(r.subject, ITEM)
 
@@ -457,7 +471,8 @@ def test_concurrent_intents_have_one_winner(ledger_rig):
     from review_gate.ledger_records import LedgerRecords
     r = ledger_rig
     key = merge_key(r.subject.repo, 7, r.subject.head)
-    ports = [LedgerRecords(str(r.db)), LedgerRecords(str(r.db))]
+    ports = [LedgerRecords(str(r.db), plugin_check=r.plugin_check),
+             LedgerRecords(str(r.db), plugin_check=r.plugin_check)]
     for port in ports:
         port.database_paths()
 
@@ -509,13 +524,14 @@ def test_crash_windows_reconcile_without_repeating_merge(ledger_rig, window):
     assert r.merge_calls() == []
 
 
-def test_version_and_package_origin_are_required_before_database_paths(ledger_rig, tmp_path, monkeypatch):
+def test_version_and_package_origin_are_required_before_database_paths(ledger_rig, tmp_path):
+    from ledger_rig import plugin_check_for
     from review_gate.ledger_runtime import load_ledger
     r = ledger_rig
     checkout = tmp_path / "bad-plugin"
     (checkout / ".claude-plugin").mkdir(parents=True)
     (checkout / ".claude-plugin" / "plugin.json").write_text('{"name":"ledger-hooks","version":"0.4.0"}')
-    monkeypatch.syspath_prepend(str(checkout))
-    refused("ledger_version_unsupported", load_ledger)
+    check = plugin_check_for(r.plugin_check, checkout, r.plugin)
+    refused("ledger_version_unsupported", load_ledger, check)
     (checkout / ".git").mkdir()
-    refused("receipt_store_in_lane_root", load_ledger)
+    refused("receipt_store_in_lane_root", load_ledger, check)

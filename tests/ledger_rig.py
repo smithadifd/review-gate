@@ -12,34 +12,59 @@ from pathlib import Path
 
 import pytest
 
-from rig import ITEM, Repo, FakeGh, Result, make_store
+from rig import ITEM, Repo, FakeGh, Result, make_store, write_roots
 from review_gate.github import files_digest
 from review_gate.records import Subject
+from review_gate.store import StoreCheck
+
+
+def plugin_check_for(check, *entries):
+    """``check`` with PYTHONPATH naming exactly ``entries``: the plugin loader's injected candidates."""
+    return StoreCheck(check.temp_roots_file, check.sandbox_roots_file,
+                      environ=dict(check.environ, PYTHONPATH=os.pathsep.join(str(e) for e in entries)),
+                      gettempdir=check.gettempdir)
 
 
 @pytest.fixture(scope="session")
-def plugin(tmp_path_factory):
+def plugin_check(tmp_path_factory):
     # CI installs the exact tag; local runs supply that same source on PYTHONPATH.
     # Copy only into a temporary plugin root: a development checkout is not trusted.
+    # The loader refuses a plugin root under a temp root, so this check names its
+    # own temp and sandbox roots, as make_store does for the database.
     spec = importlib.util.find_spec("ledger")
     assert spec is not None, "install ledger v0.6.1 before running tests"
     source = Path(spec.origin).parent
-    root = tmp_path_factory.mktemp("ledger-hooks")
+    base = Path(os.path.realpath(tmp_path_factory.mktemp("plugin")))
+    root = base / "ledger-hooks"
+    root.mkdir(mode=0o700)
     shutil.copytree(source, root / "ledger", ignore=shutil.ignore_patterns("__pycache__", "tests"))
     metadata = root / ".claude-plugin"
     metadata.mkdir()
     (metadata / "plugin.json").write_text(json.dumps({"name": "ledger-hooks", "version": "0.6.1"}))
-    sys.path.insert(0, str(root))
+    lane_tmp = base / "lane-tmp"
+    lane_tmp.mkdir()
+    home = base / "home"
+    home.mkdir()
+    check = StoreCheck(
+        str(write_roots(base / "roots" / "temp-roots.txt", [str(lane_tmp)])),
+        str(write_roots(base / "roots" / "sandbox-roots.txt", [".npm/_logs", ".claude/debug"])),
+        environ={"PYTHONPATH": str(root), "TMPDIR": str(lane_tmp), "HOME": str(home)},
+        gettempdir=lambda: str(lane_tmp),
+    )
     from review_gate.ledger_runtime import load_ledger
-    ledger = load_ledger()
+    ledger = load_ledger(check)
     assert ledger.__version__ == "0.6.1"
-    yield root
-    sys.path.remove(str(root))
+    yield check
     shutil.rmtree(root)
 
 
+@pytest.fixture(scope="session")
+def plugin(plugin_check):
+    return Path(plugin_check.environ["PYTHONPATH"])
+
+
 class LedgerRig:
-    def __init__(self, tmp_path, plugin):
+    def __init__(self, tmp_path, plugin, plugin_check):
         from ledger import open_ledger
         from review_gate.ledger_records import LedgerRecords
         self.repo = Repo()
@@ -47,8 +72,9 @@ class LedgerRig:
         Path(self.store.paths.database).unlink()
         self.db = Path(self.store.paths.database)
         self.plugin = plugin
+        self.plugin_check = plugin_check
         self.fake = FakeGh(tmp_path / "gh")
-        self.port = LedgerRecords(str(self.db))
+        self.port = LedgerRecords(str(self.db), plugin_check=plugin_check)
         with open_ledger(self.db) as lg:
             lg.append(kind="item.created", item_id=ITEM, payload={"type": "ticket", "title": "Pull request"},
                       idempotency_key="created")
@@ -140,5 +166,5 @@ class LedgerRig:
 
 
 @pytest.fixture
-def ledger_rig(tmp_path, plugin):
-    return LedgerRig(tmp_path, plugin)
+def ledger_rig(tmp_path, plugin, plugin_check):
+    return LedgerRig(tmp_path, plugin, plugin_check)
