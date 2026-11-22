@@ -83,11 +83,37 @@ def test_import_after_the_merge_base_moved_writes_nothing(ledger_rig):
     assert {e.payload["base"] for e in receipts(r)} == {r.repo.base_oid}
 
 
-def test_import_refuses_before_writing_when_the_item_holds_an_unlisted_receipt(ledger_rig):
+def test_import_rerun_after_a_live_later_round_writes_nothing(ledger_rig):
+    """The store holds rounds 1 and 2; round 3 is written live; the store is imported again."""
     r = ledger_rig
-    write(r, document(r))
-    directory = store(r, [document(r, lane="claude", served_model="claude-opus-x")])
-    refused_before_writing(r, directory, "import_readback_mismatch")
+    first = document(r)
+    second = document(r, round=2, prior_receipt={"sha256": digest(first)})
+    directory = store(r, [first, second])
+    code, out, err = run_import(r, str(directory))
+    assert code == 0 and "written=2" in out, err
+    write(r, document(r, round=3, prior_receipt={"sha256": digest(second)}))
+    before = len(events(r))
+    code, out, err = run_import(r, str(directory))
+    assert code == 0 and "written=0" in out, err
+    assert len(events(r)) == before, "the unchanged rerun wrote events"
+    assert [e.payload["round"] for e in receipts(r)] == [1, 2, 3]
+
+
+def test_import_readback_sees_a_receipt_that_was_not_recorded(ledger_rig, monkeypatch):
+    """One write returns without recording its receipt."""
+    import review_gate.receipt_import as importing
+    r = ledger_rig
+    lost = document(r)
+    directory = store(r, [document(r, lane="claude", served_model="claude-opus-x"), lost])
+    append = importing.append_receipt
+
+    def losing_one(lg, item, fields, data):
+        return None if data == lost else append(lg, item, fields, data)
+
+    monkeypatch.setattr(importing, "append_receipt", losing_one)
+    code, out, err = run_import(r, str(directory))
+    assert code == 2 and err.startswith("import_partial:"), err
+    assert [e.payload["lane"] for e in receipts(r)] == ["claude"]
 
 
 def test_import_readback_sees_a_receipt_recorded_during_the_import(ledger_rig, monkeypatch):

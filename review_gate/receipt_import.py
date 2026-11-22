@@ -118,6 +118,7 @@ def run(argv, *, records, gh, store_check, out, err):
             # A digest already recorded for its slot is that document's receipt, whatever its
             # provenance or recorded base: it is skipped, never written again or compared.
             recorded = _recorded(events, args.pr)
+            previous = {slot[3] for slot in recorded}
             pending = [row for row in documents if _slot(row) not in recorded]
             bases = {}
             for _, _, derived in pending:
@@ -132,9 +133,6 @@ def run(argv, *, records, gh, store_check, out, err):
                     refuse("receipt_credential_shape", "an imported field holds a credential shape")
                 synthetic = dict(fields, doc_sha256=digest)
                 projected.append(SimpleNamespace(id=max((e.id for e in projected), default=0) + 1, payload=synthetic))
-            if {slot[3] for slot in recorded} - expected:
-                refuse("import_readback_mismatch",
-                       "the item records receipts for this pull request that the index does not list")
             written = 0
             try:
                 for digest, data, derived in pending:
@@ -144,8 +142,10 @@ def run(argv, *, records, gh, store_check, out, err):
                     append_receipt(lg, item, fields, data)
                     written += 1
                 readback = {slot[3] for slot in _recorded(lg.events(item_id=item, kind="review.receipt"), args.pr)}
-                if expected != readback:
-                    refuse("import_readback_mismatch", "recorded receipts differ from the index")
+                # Receipts recorded before this run (live or another store's) stay; the run adds the index's.
+                if readback != previous | expected:
+                    refuse("import_readback_mismatch",
+                           "recorded receipts differ from those recorded before plus the index's")
             except Exception:
                 if written:
                     refuse("import_partial", "some receipts were recorded; rerun the unchanged store")

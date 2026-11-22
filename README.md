@@ -107,10 +107,11 @@ Import checks the admitted store's seven-column index, exact bytes, repository a
 writing. A document whose digest the item already records for the same lane, round and head is
 already recorded, whether the writer or an earlier import recorded it and whatever `base` it was
 recorded with; it is skipped, not written again. Import checks every other selected document first,
-and refuses before the first write if the item records a receipt for this pull request that the index
-does not list. It then writes rounds and named siblings in dependency order, reads the item back and
-requires the pull request's recorded digest set, from any provenance, to equal the index's selected
-set. `imported_from` names the store as given. Imported receipts count exactly as live receipts. Each imported
+then writes rounds and named siblings in dependency order. Receipts the item recorded for the pull
+request before the run, by the writer or from another store, are kept whether or not the index lists
+them: the read-back requires the recorded digest set to equal that earlier set plus the index's
+selected set. `imported_from` names the store as given. Imported receipts count exactly as live
+receipts. Each imported
 `base` is the merge base GitHub compare reported at import time; it is not what the review ran
 against. Import is not atomic across receipts: a stop can leave a partial import; an unchanged
 rerun completes it without repeating events. No document supplies grants, waivers, cites or items.

@@ -144,7 +144,7 @@ def test_import_verb_near_misses_read_nothing(ledger_rig, verb):
     assert ledger_rig.fake.calls() == []
 
 
-def test_import_readback_requires_exact_indexed_set(ledger_rig):
+def test_import_rerun_over_a_shorter_index_keeps_recorded_receipts(ledger_rig):
     r = ledger_rig
     directory = store(r, [document(r), document(r, lane="claude", served_model="claude-opus-x")])
     assert invoke(r, directory)[0] == 0
@@ -152,7 +152,7 @@ def test_import_readback_requires_exact_indexed_set(ledger_rig):
     index.write_text(index.read_text().splitlines()[0] + "\n")
     before = len(events(r))
     code, out, err = invoke(r, directory)
-    assert code == 2 and err.startswith("import_readback_mismatch:"), err
+    assert code == 0 and "written=0" in out, err
     assert len(events(r)) == before
 
 
