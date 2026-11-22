@@ -182,6 +182,12 @@ class LedgerRecords:
             lane = event.payload["lane"]
             if lane not in lanes or event.payload["round"] > lanes[lane].payload["round"]:
                 lanes[lane] = event
+        deciding_slots = {(e.payload["lane"], e.payload["round"], e.payload["head"])
+                          for e in lanes.values()}
+        for event in events:
+            p = event.payload
+            if (p["lane"], p["round"], p["head"]) in deciding_slots and "supersedes" in p:
+                refuse("receipt_settlement_unsupported", str(event.id))
         counted = tuple(e for e in lanes.values() if e.payload["verdict"] in ("approved", "changes_requested"))
         if len(counted) < 2:
             refuse("receipts_insufficient", "two distinct deciding lanes are required")

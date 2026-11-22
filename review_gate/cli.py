@@ -17,12 +17,14 @@ from .gh import GhTransport
 from .records import UnfilledRecords
 from .ledger_records import LedgerRecords
 from .recovery import run as recover
+from .receipt_import import run as import_receipts
 from .store import StoreCheck
 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    runner = recover if argv and argv[0] == "recover" else run
+    runner = (import_receipts if argv and argv[0] == "import" else
+              recover if argv and argv[0] == "recover" else run)
     database = os.environ.get("LEDGER_DB")
     return runner(
         argv,
