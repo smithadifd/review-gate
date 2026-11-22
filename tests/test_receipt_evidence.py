@@ -126,3 +126,23 @@ def test_concurrent_new_heads_cannot_restart_a_lane(ledger_rig, monkeypatch):
         results = list(workers.map(attempt, [r.subject.head, "e" * 40]))
     assert sorted(results) == ["receipt_round_restart", "review.receipt"], "concurrent writers restarted one lane"
     assert len([e for e in events(r) if e.kind == "review.receipt"]) == 1
+
+
+def test_import_refuses_cyclic_parsed_dependencies(ledger_rig, monkeypatch):
+    """Inject a cycle at the parsed-dependency boundary, before ledger writes."""
+    from dataclasses import replace
+    import hashlib
+    import review_gate.receipt_import as importing
+    r = ledger_rig
+    documents = [document(r), document(r, lane="claude", served_model="claude-opus-x")]
+    digests = [hashlib.sha256(data).hexdigest() for data in documents]
+    derive = importing.derive_document
+    def cyclic(data):
+        parsed = derive(data)
+        return replace(parsed, source=digests[1 - documents.index(data)])
+    monkeypatch.setattr(importing, "derive_document", cyclic)
+    directory = store(r, documents)
+    before = events(r)
+    code, out, err = invoke(r, directory)
+    assert code == 2 and err.startswith("import_dependency_invalid:"), err
+    assert events(r) == before, "dependency refusal wrote events"
