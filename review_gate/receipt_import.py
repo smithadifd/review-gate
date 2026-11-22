@@ -127,9 +127,14 @@ def run(argv, *, records, gh, store_check, out, err):
                                              imported_from={"store": args.store, "sha256": digest})
                     append_receipt(lg, item, fields, data)
                     written += digest not in existing
-                recorded = {e.payload["doc_sha256"] for e in lg.events(item_id=item, kind="review.receipt")}
-                if not expected <= recorded:
-                    refuse("import_readback_mismatch", "not every indexed document was recorded")
+                recorded = {
+                    e.payload["doc_sha256"]
+                    for e in lg.events(item_id=item, kind="review.receipt")
+                    if (e.payload["repo"], e.payload["pr"]) == (args.pr.key, args.pr.number)
+                    and e.payload.get("imported_from", {}).get("store") == args.store
+                }
+                if expected != recorded:
+                    refuse("import_readback_mismatch", "recorded import documents differ from the index")
             except Exception:
                 if written:
                     refuse("import_partial", "some receipts were recorded; rerun the unchanged store")

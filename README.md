@@ -95,6 +95,9 @@ Cells are those recorded by the runner, not independently classified by a rubric
 The lane, served model, tier, cap flag and document remain the runner's word: agreement and binding
 do not prove that a review happened. The writer attaches the same bytes and writes one receipt
 through the ledger's transaction, with constant attribution. A live write never sets `imported_from`.
+Non-finite numbers (including exponent overflow), repeated keys and escaped unpaired surrogates
+refuse before any write. If the database disappears after admission, the writer refuses rather
+than creating it.
 
 The item must already exist and link the pull request. With the ledger CLI, create it with
 `ledger new --type ticket --title <title> --source pr:<owner>/<repo>#<N>`, then
@@ -102,7 +105,8 @@ The item must already exist and link the pull request. With the ledger CLI, crea
 
 Import checks the admitted store's seven-column index, exact bytes, repository and number before
 writing. It checks all selected documents first, writes rounds and named siblings in dependency
-order, then reads the item back. Imported receipts count exactly as live receipts. Each imported
+order, then reads the item back and requires its imported digest set for this store and pull request
+to equal the index's selected set. Imported receipts count exactly as live receipts. Each imported
 `base` is the merge base GitHub compare reported at import time; it is not what the review ran
 against. Import is not atomic across receipts: a stop can leave a partial import; an unchanged
 rerun completes it without repeating events. No document supplies grants, waivers, cites or items.

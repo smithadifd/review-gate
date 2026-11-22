@@ -21,8 +21,13 @@ def admitted_writer(records, store_check):
                          os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        with records._open(write=True) as lg:
-            yield lg
+        try:
+            with records._open(write=True) as lg:
+                yield lg
+        except ledger_module("store").LedgerError:
+            if not os.path.exists(paths.database):
+                refuse("receipt_store_database_missing", "database disappeared after admission")
+            raise
     finally:
         os.close(descriptor)
 

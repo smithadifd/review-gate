@@ -27,10 +27,11 @@ def store(r, documents):
     return directory
 
 
-def invoke(r, directory, *, resolved=True):
+def invoke(r, directory, *, resolved=True, heads=None):
     routes = r.repo.routes()
-    endpoint = f"repos/{r.repo.slug}/compare/main...{r.subject.head}"
-    routes[key(["api", endpoint])] = [ok({"merge_base_commit": {"sha": r.repo.base_oid}} if resolved else {})]
+    for head in heads or [r.subject.head]:
+        endpoint = f"repos/{r.repo.slug}/compare/main...{head}"
+        routes[key(["api", endpoint])] = [ok({"merge_base_commit": {"sha": r.repo.base_oid}} if resolved else {})]
     r.fake.set_routes(routes)
     out, err = io.StringIO(), io.StringIO()
     code = run(["import", "--store", str(directory), "--pr", r.repo.url],
@@ -101,7 +102,7 @@ def test_import_orders_rounds_and_named_siblings(ledger_rig):
     digest = hashlib.sha256(first).hexdigest()
     sibling = document(r, settled_from={"sha256": digest})
     later = document(r, round=2, prior_receipt={"sha256": hashlib.sha256(sibling).hexdigest()})
-    directory = store(r, [later, sibling, first])
+    directory = store(r, [first, later, sibling])
     code, out, err = invoke(r, directory)
     assert code == 0, err
     receipts = [e for e in events(r) if e.kind == "review.receipt"]
@@ -141,3 +142,96 @@ def test_import_verb_near_misses_read_nothing(ledger_rig, verb):
         parse_import_args([verb, "--store", "/unused", "--pr", ledger_rig.repo.url])
     assert exc.value.name == "command_unknown"
     assert ledger_rig.fake.calls() == []
+
+
+def test_import_readback_requires_exact_indexed_set(ledger_rig):
+    r = ledger_rig
+    directory = store(r, [document(r), document(r, lane="claude", served_model="claude-opus-x")])
+    assert invoke(r, directory)[0] == 0
+    index = directory / "review-run.index"
+    index.write_text(index.read_text().splitlines()[0] + "\n")
+    before = len(events(r))
+    code, out, err = invoke(r, directory)
+    assert code == 2 and err.startswith("import_readback_mismatch:"), err
+    assert len(events(r)) == before
+
+
+def test_import_admits_store_before_opening_index(ledger_rig):
+    from test_store import settings
+    r = ledger_rig
+    directory = store(r, [document(r)])
+    (directory / "review-run.index").write_text("not an index")
+    settings(r.db.parent.parent, [directory])
+    before = len(events(r))
+    code, out, err = invoke(r, directory)
+    assert code == 2 and err.startswith("receipt_store_lane_writable:"), err
+    assert len(events(r)) == before
+    assert r.fake.calls() == []
+
+
+def test_import_index_number_must_agree_with_document(ledger_rig):
+    r = ledger_rig
+    directory = store(r, [document(r)])
+    index = directory / "review-run.index"
+    columns = index.read_text().strip().split("\t")
+    columns[5] = "8"
+    index.write_text("\t".join(columns) + "\n")
+    before = len(events(r))
+    code, out, err = invoke(r, directory)
+    assert code == 2 and err.startswith("import_index_identity_mismatch:"), err
+    assert len(events(r)) == before
+
+
+def test_import_skips_design_pass_by_name(ledger_rig):
+    r = ledger_rig
+    directory = store(r, [document(r, pr=None, design_row="design"), document(r)])
+    code, out, err = invoke(r, directory)
+    assert code == 0 and "import_design_pass_skipped\n" in out, err
+    assert len([e for e in events(r) if e.kind == "review.receipt"]) == 1
+
+
+def test_import_resolves_base_once_per_distinct_head(ledger_rig):
+    r = ledger_rig
+    first = document(r, reviewed_head="e" * 40)
+    later = document(r, round=2, prior_receipt={"sha256": hashlib.sha256(first).hexdigest()})
+    directory = store(r, [first, later, document(r, lane="claude", served_model="claude-opus-x")])
+    code, out, err = invoke(r, directory, heads=["e" * 40, r.subject.head])
+    assert code == 0, err
+    compares = [c for c in r.fake.calls() if c[0] == "api" and "/compare/" in c[1]]
+    assert len(compares) == 2
+    assert {c[1].rsplit("...", 1)[1] for c in compares} == {"e" * 40, r.subject.head}
+
+
+def test_import_rerun_completes_after_interrupted_write(ledger_rig, monkeypatch):
+    import review_gate.receipt_import as importing
+    r = ledger_rig
+    directory = store(r, [document(r), document(r, lane="claude", served_model="claude-opus-x")])
+    append = importing.append_receipt
+    calls = 0
+
+    def interrupted(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("write interrupted")
+        return append(*args)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(importing, "append_receipt", interrupted)
+        code, out, err = invoke(r, directory)
+    assert code == 2 and err.startswith("import_partial:"), err
+    assert len([e for e in events(r) if e.kind == "review.receipt"]) == 1
+    code, out, err = invoke(r, directory)
+    assert code == 0 and "written=1" in out, err
+    assert len([e for e in events(r) if e.kind == "review.receipt"]) == 2
+
+
+def test_import_changed_file_after_success_writes_nothing(ledger_rig):
+    r = ledger_rig
+    directory = store(r, [document(r)])
+    assert invoke(r, directory)[0] == 0
+    (directory / "0" / "review-run.json").write_bytes(document(r, result_path="different"))
+    before = len(events(r))
+    code, out, err = invoke(r, directory)
+    assert code == 2 and err.startswith("import_index_digest_mismatch:"), err
+    assert len(events(r)) == before

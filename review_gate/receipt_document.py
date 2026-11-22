@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import re
 
 from .grammar import parse_pr_url
@@ -36,8 +37,25 @@ def parse_document(data):
     def constant(value):
         raise ValueError("non-finite number")
 
+    def finite(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("non-finite number")
+        return number
+
     try:
-        value = json.loads(data.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=pairs,
+                           parse_constant=constant, parse_float=finite)
+        pending = [value]
+        while pending:
+            current = pending.pop()
+            if type(current) is str:
+                current.encode("utf-8")
+            elif type(current) is dict:
+                pending.extend(current.keys())
+                pending.extend(current.values())
+            elif type(current) is list:
+                pending.extend(current)
     except (ValueError, UnicodeError, RecursionError):
         refuse("receipt_doc_not_json", "expected one UTF-8 JSON object without repeated keys")
     if type(value) is not dict:
