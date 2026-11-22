@@ -1,11 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-22
 
-- **Accepted ledger-hooks versions are an exact set: 0.6.1, 0.6.2, 0.6.3 and 0.7.0.** The manifest's version must be a member by exact string equality, and the imported package's version must equal the manifest's. Anything else, including a neighbour such as 0.7.1, a prefix or a manifest and package that differ, refuses `ledger_version_unsupported`, which now lists the accepted versions. Receipts, credential scanning, the doc and grants verbs, `CliError` and the review and merge-record schemas were checked as unchanged across the four.
-- **Known limit with ledger 0.7.0.** On a loop-managed item whose pull request was linked by the loop, the merge succeeds and is recorded, but closing the items is refused (`reserved-transition:loop-close`): the merge prints `items_close_failed` and exits 0, and `recover` keeps refusing until the loop closes the item. Nothing reaches this until the loop links pull requests.
-- **CI runs the whole suite once per accepted ledger version** (a `ledger-version` matrix axis next to the Python version).
-- **README gains an Install section**: the pinned git install, the ledger-hooks plugin it reads, and the accepted versions.
+review-gate now accepts the ledger-hooks versions the public harness default serves, as an exact set, and is installable with a pinned git install.
+
+- **Accepted ledger-hooks versions are an exact set: 0.6.1, 0.6.2, 0.6.3 and 0.7.0.** The manifest's version must be a member by exact string equality, and the imported package's version must equal the manifest's. Anything else, including a neighbour such as 0.7.1, a prefix or a manifest and package that differ, refuses `ledger_version_unsupported`, which now lists the accepted versions. Receipts, credential scanning, the doc and grants verbs, `CliError` and the review and merge-record schemas were checked as unchanged across the four. (#6)
+- **Known limit with ledger 0.7.0.** On a loop-managed item whose pull request was linked by the loop, the merge succeeds and is recorded, but closing the items is refused (`reserved-transition:loop-close`): the merge prints `items_close_failed` and exits 0, and `recover` keeps refusing until the loop closes the item. Nothing reaches this until the loop links pull requests. (#6)
+- **CI runs the whole suite once per accepted ledger version** (a `ledger-version` matrix axis next to the Python version). (#6)
+- **README gains an Install section**: the pinned git install, the ledger-hooks plugin it reads, and the accepted versions. (#6)
+
+Install with `@v0.2.0`.
 
 ## 0.1.0 — 2026-11-22
 
