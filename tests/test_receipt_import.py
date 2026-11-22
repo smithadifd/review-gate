@@ -235,3 +235,14 @@ def test_import_changed_file_after_success_writes_nothing(ledger_rig):
     code, out, err = invoke(r, directory)
     assert code == 2 and err.startswith("import_index_digest_mismatch:"), err
     assert len(events(r)) == before
+
+def test_import_third_oversize_document_leaves_all_three_unwritten(ledger_rig):
+    r = ledger_rig
+    directory = store(r, [document(r), document(r, lane="second"),
+                          document(r, lane="third", result_path="x" * 65536)])
+    index = directory / "review-run.index"
+    index.write_text("\n".join(reversed(index.read_text().splitlines())) + "\n")
+    before = events(r)
+    code, out, err = invoke(r, directory)
+    assert code == 2 and err.startswith("receipt_doc_too_large:"), err
+    assert events(r) == before, "write-as-you-go import recorded receipts before the third-file refusal"
