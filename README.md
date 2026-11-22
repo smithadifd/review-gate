@@ -20,6 +20,7 @@ review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB
 python3 -m review_gate merge ...
 review-gate recover <PR URL> <full head sha> --items ID[,ID...]
 review-gate import --store <absolute directory> --pr <PR URL>
+review-gate record < one-document.json
 ```
 
 - `<PR URL>` is `https://github.com/<owner>/<repo>/pull/<N>`, matched whole: no trailing slash, no
@@ -115,6 +116,36 @@ receipts. Each imported
 `base` is the merge base GitHub compare reported at import time; it is not what the review ran
 against. Import is not atomic across receipts: a stop can leave a partial import; an unchanged
 rerun completes it without repeating events. No document supplies grants, waivers, cites or items.
+
+### Walk step: record one lane result
+
+`review-gate record` reads one writer document from standard input and records it with
+`write_receipt`. Run each lane, then pipe each lane's document in once:
+
+```sh
+export LEDGER_DB=/absolute/path/to/ledger.db
+export PYTHONPATH=/absolute/path/to/ledger-hooks-plugin-root
+review-gate record < sol-round-1.json
+review-gate record < claude-round-1.json
+```
+
+Preconditions, none of which the verb supplies: `LEDGER_DB` is an absolute database file (unset
+refuses `records_unavailable`); the ledger plugin root is an absolute `PYTHONPATH` entry; and the
+pull request's item already exists and links the pull request, because the verb never creates or
+links items (`pr_item_missing` refuses).
+
+The argv is exactly `record`: no flag and no operand, so `records`, `record x` and `record --flag`
+refuse (`command_unknown`, `argument_unknown`) before standard input is read. Standard input is
+read as bytes, at most 65536 bytes plus one; a longer input refuses `receipt_doc_too_large` and is
+never cut to fit, and empty input refuses `record_empty`. The verb adds no field and derives
+nothing: verdict, cells, family, the prior receipt chain and idempotency are the writer's, so
+every refusal the writer already makes (family mismatch, count disagreement, a round restart, a
+second document for an occupied slot, a credential shape) stays refused, with no event written.
+
+Exit 0 prints one line, `written <PR URL> round=<n> lane=<lane>` or, when the same bytes were
+already recorded for that slot, `already_recorded <PR URL> round=<n> lane=<lane>`; a rerun writes
+nothing. Exit 2 prints `<refusal name>: <detail>` on standard error, or `record_failed: <Type>` for
+any other error. There are no other exit codes.
 
 Decision: settlement derivation is separate from receipt storage. Until it exists, a replacing
 record in a deciding slot refuses rather than dropping findings on a sibling's word.

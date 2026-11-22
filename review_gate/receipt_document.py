@@ -17,14 +17,15 @@ DIGEST = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 ROOT = re.compile(r"[^\s:#]+:[1-9][0-9]*@[0-9a-f]{16}")
 TOKEN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+CAP = 65536
 SOURCES = ("settled_from", "adjudicated_from", "reparsed_from")
 
 
 def parse_document(data):
     if type(data) is not bytes:
         refuse("receipt_doc_not_json", "the document must be bytes")
-    if len(data) > 65536:
-        refuse("receipt_doc_too_large", "the inline limit is 65536 bytes")
+    if len(data) > CAP:
+        refuse("receipt_doc_too_large", f"the inline limit is {CAP} bytes")
 
     def pairs(entries):
         value = {}

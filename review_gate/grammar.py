@@ -212,3 +212,12 @@ def parse_import_args(argv):
     if not isinstance(directory, str) or not directory.startswith("/") or "\0" in directory:
         refuse("import_store_relative", "--store must be an absolute folder")
     return ImportArgs(directory, parse_pr_url(values["--pr"]))
+
+
+def parse_record_args(argv):
+    """Exactly record: no flag, no operand. The document is standard input."""
+    argv = list(argv)
+    if not argv or argv[0] != "record":
+        refuse("command_unknown", "expected record")
+    if len(argv) != 1:
+        refuse("argument_unknown", "usage: review-gate record (one document on standard input)")
