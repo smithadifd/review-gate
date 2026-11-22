@@ -192,3 +192,23 @@ def _parse_args(argv, *, command, usage, remediation_allowed) -> MergeArgs:
     items = parse_items(items_value)
     remediation = None if remediation_value is None else parse_remediation(remediation_value)
     return MergeArgs(pr=pr, url=pr.url, sha=sha, items=items, remediation=remediation)
+
+
+@dataclass(frozen=True)
+class ImportArgs:
+    store: str
+    pr: PullRequest
+
+
+def parse_import_args(argv):
+    """Exactly import --store ABSOLUTE_DIRECTORY --pr PR_URL, in either flag order."""
+    argv = list(argv)
+    if not argv or argv[0] != "import":
+        refuse("command_unknown", "expected import")
+    if len(argv) != 5 or {argv[1], argv[3]} != {"--store", "--pr"}:
+        refuse("argument_unknown", "usage: review-gate import --store <dir> --pr <URL>")
+    values = {argv[1]: argv[2], argv[3]: argv[4]}
+    directory = values["--store"]
+    if not isinstance(directory, str) or not directory.startswith("/") or "\0" in directory:
+        refuse("import_store_relative", "--store must be an absolute folder")
+    return ImportArgs(directory, parse_pr_url(values["--pr"]))

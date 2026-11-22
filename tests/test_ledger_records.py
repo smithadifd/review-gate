@@ -290,7 +290,7 @@ def test_superseding_evidence_changes_recheck_token(ledger_rig):
             nonlocal changed
             if not changed and argv[:2] == ["api", f"repos/{r.repo.slug}/git/ref/heads/main"]:
                 changed = True
-                r.receipt(supersedes=first.id)
+                r.receipt(round_=2, prior_receipt=first.id)
             return transport.run(argv)
 
     result = r.run(gh=ChangingGh())

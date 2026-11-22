@@ -11,7 +11,7 @@ plugin root on `PYTHONPATH`, not from a checkout-local `ledger/` or a vendored c
 root is an absolute `PYTHONPATH` entry (or its `plugins/ledger-hooks`), never the current directory
 or `sys.path[0]`, and it must pass stage 1's directory checks (git trees, lane roots, temp roots,
 sandbox write roots) before anything in it is read or imported. No database opens before stage 1 admission;
-read stages use fresh read-only connections. The receipt writer and `review import` are not included.
+read stages use fresh read-only connections. Receipt writing and indexed-store import use the same admission.
 
 ## Usage
 
@@ -19,6 +19,7 @@ read stages use fresh read-only connections. The receipt writer and `review impo
 review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
 python3 -m review_gate merge ...
 review-gate recover <PR URL> <full head sha> --items ID[,ID...]
+review-gate import --store <absolute directory> --pr <PR URL>
 ```
 
 - `<PR URL>` is `https://github.com/<owner>/<repo>/pull/<N>`, matched whole: no trailing slash, no
@@ -62,8 +63,9 @@ The module docstrings carry each stage's full rules and refusal names.
 
 Two deciding receipts from distinct lanes are required. Only reserved `review.receipt` events
 count, bound to repository, pull request, head and files digest. Every inline receipt document
-is verified by the ledger, not parsed as authority. Newest per lane/round/head supersedes older
-events; only the highest round per lane decides. Approved and changes-requested receipts count;
+is verified by the ledger, not parsed as authority. Only the highest round per lane decides;
+a replacing record anywhere in that deciding slot refuses `receipt_settlement_unsupported`.
+Approved and changes-requested receipts count;
 an empty changes request refuses. Crashed and unparseable newest rounds never fall back.
 Block findings each need their own standing waiver, harden findings each need an exact-source
 child outside `--items`, and counted rounds past three need a standing grant or a current cite.
@@ -85,6 +87,29 @@ pull request remains open refuses `merge_intent_unreconciled` on every retry: me
 then recover, or review a new head. There is no reset-to-absent operation.
 
 
+## Writing and importing receipts
+
+`review_gate.receipt_writer.write_receipt(document, *, records, store_check)` takes document bytes,
+not a path or decided fields. One derivation supplies verdict, cells, ids, counts and model family.
+Cells are those recorded by the runner, not independently classified by a rubric.
+The lane, served model, tier, cap flag and document remain the runner's word: agreement and binding
+do not prove that a review happened. The writer attaches the same bytes and writes one receipt
+through the ledger's transaction, with constant attribution. A live write never sets `imported_from`.
+
+The item must already exist and link the pull request. With the ledger CLI, create it with
+`ledger new --type ticket --title <title> --source pr:<owner>/<repo>#<N>`, then
+`ledger link <item> --rel pr --target <URL>`. Neither writer nor importer creates or links items.
+
+Import checks the admitted store's seven-column index, exact bytes, repository and number before
+writing. It checks all selected documents first, writes rounds and named siblings in dependency
+order, then reads the item back. Imported receipts count exactly as live receipts. Each imported
+`base` is the merge base GitHub compare reported at import time; it is not what the review ran
+against. Import is not atomic across receipts: a stop can leave a partial import; an unchanged
+rerun completes it without repeating events. No document supplies grants, waivers, cites or items.
+
+Decision: settlement derivation is separate from receipt storage. Until it exists, a replacing
+record in a deciding slot refuses rather than dropping findings on a sibling's word.
+
 ## Residual risks
 
 - GitHub's merge call takes an expected head and no expected base. A retarget, a default-branch
@@ -97,8 +122,8 @@ then recover, or review a new head. There is no reset-to-absent operation.
 - A second item linking the pull request after intent makes later writes refuse `pr_item_ambiguous`;
   links cannot be removed through this command.
 - Tier is not judged against the change: a lighter-tier receipt counts for any change. No tier or
-  path lowers a requirement. Settlement-bearing receipts refuse `receipt_settlement_unsupported`
-  until document-derived settlements ship with the writer/importer.
+  path lowers a requirement. Settlements remain unsupported: a replacing record in a deciding slot
+  refuses `receipt_settlement_unsupported`; replacing records at older heads do not decide.
 - The adjacent family configuration is not an owner-authenticated record. Picker capture is defended
   by an external rail, not by the ledger against an in-process caller.
 - Case and Unicode spellings of a lane root are compared by file identity, which only matters on a

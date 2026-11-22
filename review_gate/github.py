@@ -315,6 +315,17 @@ def base_in_head(gh, pr, sha: str, base: str) -> str:
     return tip
 
 
+def import_base(gh, pr, head, branch):
+    """The compare merge base at import time, not the review's original base."""
+    endpoint = f"repos/{pr.owner}/{pr.repo}/compare/{_quoted_branch(branch, 'import_base_unresolved')}...{head}"
+    doc = api_json(gh, endpoint, "import_base_unresolved")
+    commit = doc.get("merge_base_commit") if isinstance(doc, dict) else None
+    sha = commit.get("sha") if isinstance(commit, dict) else None
+    if not isinstance(sha, str) or OID.fullmatch(sha) is None:
+        refuse("import_base_unresolved", "compare has no merge_base_commit.sha")
+    return sha
+
+
 # ---- times, READY and the head branch -------------------------------------
 
 def parse_time(value, field: str, name: str) -> datetime:
