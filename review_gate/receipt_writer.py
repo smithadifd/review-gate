@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import os
+from typing import Any, NamedTuple
 
 from .ledger_runtime import ledger_module
 from .receipt_document import COMMIT, derive_document
@@ -97,6 +98,12 @@ def append_receipt(lg, item, fields, data):
         refuse("receipt_idempotency_conflict", "an existing receipt has different fields or attribution")
 
 
+class Written(NamedTuple):
+    """The receipt event, and whether this call appended it (decided under the writer's lock)."""
+    event: Any
+    appended: bool
+
+
 def write_receipt(document, *, records, store_check):
     """Take bytes, never a path or caller-supplied decided fields."""
     derived = derive_document(document)
@@ -110,4 +117,6 @@ def write_receipt(document, *, records, store_check):
         for finding in fields.get("findings", []):
             if "carried_from" in finding:
                 records._root_finding(lg, subject, item, None, finding)
-        return append_receipt(lg, item, fields, document)
+        recorded = {e.id for e in events}
+        event = append_receipt(lg, item, fields, document)
+        return Written(event, event.id not in recorded)

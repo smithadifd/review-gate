@@ -66,6 +66,55 @@ def test_the_same_document_again_is_already_recorded(ledger_rig, record):
     assert len(events(r)) == before
 
 
+def receipts(r):
+    return [e for e in events(r) if e.kind == "review.receipt"]
+
+
+def test_bytes_first_imported_are_already_recorded_without_calling_the_writer(ledger_rig, record):
+    from test_receipt_import import invoke, store
+    r = ledger_rig
+    data = document(r)
+    code, _, err = invoke(r, store(r, [data]))
+    assert code == 0, err
+    assert "imported_from" in receipts(r)[0].payload
+    before = len(events(r))
+    done = record(data)
+    assert done.code == 0, done.err
+    assert done.err == ""
+    assert done.out == f"already_recorded {r.repo.url} round=1 lane=sol\n"
+    assert len(events(r)) == before
+
+
+def test_a_concurrent_record_of_the_same_bytes_is_reported_already_recorded(ledger_rig, record, monkeypatch):
+    from review_gate.receipt_writer import write_receipt
+    r = ledger_rig
+    data = document(r)
+    read = receipt_record._known
+
+    def read_then_another_writer(*args):
+        found = read(*args)
+        write_receipt(data, records=r.port, store_check=r.store.check)
+        return found
+    monkeypatch.setattr(receipt_record, "_known", read_then_another_writer)
+    before, receipts_before = len(events(r)), len(receipts(r))
+    done = record(data)
+    assert done.code == 0, done.err
+    assert done.out == f"already_recorded {r.repo.url} round=1 lane=sol\n"
+    assert len(receipts(r)) == receipts_before + 1
+    assert len(events(r)) == before + 2, "one receipt and its attachment, written once"
+
+
+def test_closed_standard_input_refuses_as_empty(ledger_rig, record, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", None)
+    before = len(events(ledger_rig))
+    code = cli.main(["record"])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert captured.err.startswith("record_empty: "), captured.err
+    assert len(events(ledger_rig)) == before
+
+
 def test_a_second_lane_is_its_own_receipt(ledger_rig, record):
     r = ledger_rig
     assert record(document(r)).code == 0

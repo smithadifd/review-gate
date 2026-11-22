@@ -137,15 +137,20 @@ links items (`pr_item_missing` refuses).
 The argv is exactly `record`: no flag and no operand, so `records`, `record x` and `record --flag`
 refuse (`command_unknown`, `argument_unknown`) before standard input is read. Standard input is
 read as bytes, at most 65536 bytes plus one; a longer input refuses `receipt_doc_too_large` and is
-never cut to fit, and empty input refuses `record_empty`. The verb adds no field and derives
-nothing: verdict, cells, family, the prior receipt chain and idempotency are the writer's, so
+never cut to fit, and empty or closed input refuses `record_empty`. The verb adds no field and
+derives nothing: verdict, cells, family, the prior receipt chain and idempotency are the writer's, so
 every refusal the writer already makes (family mismatch, count disagreement, a round restart, a
 second document for an occupied slot, a credential shape) stays refused, with no event written.
 
 Exit 0 prints one line, `written <PR URL> round=<n> lane=<lane>` or, when the same bytes were
 already recorded for that slot, `already_recorded <PR URL> round=<n> lane=<lane>`; a rerun writes
-nothing. Exit 2 prints `<refusal name>: <detail>` on standard error, or `record_failed: <Type>` for
-any other error. There are no other exit codes.
+nothing. As with `import`, bytes already recorded for their slot are that document's receipt
+whatever their provenance, so a document first recorded by `import` is `already_recorded` and the
+writer is not called. The written or already-recorded word comes from the writer's own decision
+under its lock, so a concurrent record of the same bytes reports `already_recorded`.
+
+Exit 2 prints `<refusal name>: <detail>` on standard error, or `record_failed: <Type>` for any
+other error. There are no other exit codes.
 
 Decision: settlement derivation is separate from receipt storage. Until it exists, a replacing
 record in a deciding slot refuses rather than dropping findings on a sibling's word.
