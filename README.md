@@ -14,14 +14,14 @@ python3 -m pip install 'review-gate @ git+https://github.com/smithadifd/review-g
 ```
 
 It reads the ledger through the ledger-hooks plugin that the public harness default installs; put
-that plugin's root on `PYTHONPATH` as an absolute entry (see Status below). The accepted ledger-hooks
+that plugin's root on `PYTHONPATH` as an absolute entry (see Status). The accepted ledger-hooks
 versions are exactly `0.6.1`, `0.6.2`, `0.6.3` and `0.7.0`. The manifest's version must be one of
 them, and the imported ledger package must report the same version as the manifest; any other
 version, a range or a prefix refuses `ledger_version_unsupported`.
 
 **Status: ledger-backed merges and recovery.** Set `LEDGER_DB` to an absolute database file;
 unset or empty refuses `records_unavailable`, and a relative spelling refuses `ledger_db_relative`.
-The variable names a file, never policy. The runtime loads ledger (one of the accepted ledger-hooks versions, below) from the ledger-hooks
+The variable names a file, never policy. The runtime loads ledger (one of the accepted ledger-hooks versions, above) from the ledger-hooks
 plugin root on `PYTHONPATH`, not from a checkout-local `ledger/` or a vendored copy. The plugin
 root is an absolute `PYTHONPATH` entry (or its `plugins/ledger-hooks`), never the current directory
 or `sys.path[0]`, and it must pass stage 1's directory checks (git trees, lane roots, temp roots,
@@ -94,7 +94,7 @@ unknown models never satisfy this requirement. A standing head-bound exception c
 Stage 11 commits `review.merge-intent` before invoking GitHub and records `review.merge-done`
 only after confirming MERGED at the supplied head. Both records contain key, pull request and
 head; no accepted ledger version has a merge-commit field. The commit remains on GitHub and stdout.
-Closing an already closed item is a no-op; close failures can be retried through `recover`.
+Closing an already closed item is a no-op; close failures can be retried through `recover`, except on a loop-managed item whose pull request the loop linked (ledger 0.7.0): the ledger refuses that close (`reserved-transition:loop-close`), and `recover` keeps refusing until the loop closes the item.
 
 `recover` never merges. After grammar and store admission it resolves the current item and
 requires a live MERGED read at the pinned head. Started writes done, then closes the items;

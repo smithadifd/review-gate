@@ -13,11 +13,16 @@ pass the directory checks stage 1 applies to the database's directory
 (``StoreCheck.check_root``): no git tree, hand-back, lane root or
 lane-writable root, no temp root and no sandbox write root, owned by the
 caller and not group or other writable. A refusal keeps the store check's
-name and names the plugin root. Then the manifest's version must be exactly
-one of ``SUPPORTED_VERSIONS`` (an exact set of strings, never a range or a
-prefix), and the imported package's ``__version__`` must equal the manifest's
-version exactly. Nothing from a candidate root is read, imported or executed
-before the manifest passes.
+name and names the plugin root.
+
+Order: nothing in a candidate root is read before those directory checks
+pass. The manifest is the only thing read before the version check, and
+nothing is imported or executed until the manifest's name is ledger-hooks and
+its version is exactly one of ``SUPPORTED_VERSIONS`` (an exact set of
+strings, never a range or a prefix). The package's ``__init__`` must run
+before its ``__version__`` can be compared, so a root whose package differs
+from its manifest has already run when it is refused
+(``ledger_version_unsupported``). It refuses on every call, not only the first.
 
 The check is injectable as stage 1's is: the command uses
 ``StoreCheck.shipped()`` (the process environment and the shipped root
