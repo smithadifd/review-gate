@@ -16,13 +16,14 @@ permissions:
 
 jobs:
   test:
-    name: test (python ${{ matrix.python-version }})
+    name: test (python ${{ matrix.python-version }}, ledger ${{ matrix.ledger-version }})
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+        ledger-version: ["0.6.1", "0.6.2", "0.6.3", "0.7.0"]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -33,7 +34,7 @@ jobs:
       - name: Install the test dependencies
         run: python -m pip install pytest PyYAML
       - name: Install the pinned ledger
-        run: python -m pip install 'ledger @ git+https://github.com/smithadifd/ledger.git@v0.6.1'
+        run: python -m pip install 'ledger @ git+https://github.com/smithadifd/ledger.git@v${{ matrix.ledger-version }}'
       - name: Test suite
         run: python -m pytest -q -p no:cacheprovider
 

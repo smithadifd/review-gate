@@ -2,5 +2,5 @@
 # A row allows one deny-list match in one path. The pseudo path :commit-identity allows a match in a commit's author or committer identity.
 :commit-identity	95a86be226161e30e5f20e9938d8ed0947429cabacc4f481dded0ad2a45f0d94	the owner's GitHub handle in the GitHub noreply commit address, which the owner chose for this public repository (owner picker 2026-11-21)
 :commit-identity	d979885447a413abb6d606a5d0f45c3b7809e6fde2c83f0df3426f1fc9bfed97	the owner's name in the commit identity of a public repository whose LICENSE already names him as the copyright holder (owner chose this identity 2026-11-21)
-.github/workflows/ci.yml	95a86be226161e30e5f20e9938d8ed0947429cabacc4f481dded0ad2a45f0d94	the public ledger repository's URL, pinned at v0.6.1, which CI and the development instructions install
-README.md	95a86be226161e30e5f20e9938d8ed0947429cabacc4f481dded0ad2a45f0d94	the public ledger repository's URL, pinned at v0.6.1, which CI and the development instructions install
+.github/workflows/ci.yml	95a86be226161e30e5f20e9938d8ed0947429cabacc4f481dded0ad2a45f0d94	the public ledger repository's URL, pinned per accepted version, which CI and the development instructions install
+README.md	95a86be226161e30e5f20e9938d8ed0947429cabacc4f481dded0ad2a45f0d94	the public repositories' URLs (ledger and review-gate), pinned to a release tag, which the install and development instructions use

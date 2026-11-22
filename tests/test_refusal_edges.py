@@ -1,5 +1,6 @@
 """Fail closed on damaged records and impossible dependency answers."""
 from dataclasses import replace
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -9,7 +10,7 @@ from rig import ITEM
 from ledger_rig import plugin_check_for
 from test_ledger_records import corrupt_event, refused
 from review_gate.ledger_records import LedgerRecords
-from review_gate.ledger_runtime import load_ledger
+from review_gate.ledger_runtime import SUPPORTED_VERSIONS, load_ledger
 from review_gate.records import merge_key
 
 
@@ -26,7 +27,7 @@ def test_invalid_plugin_refuses(plugin, plugin_check, tmp_path, damage):
     if damage == "manifest":
         manifest.write_text("{")
     else:
-        manifest.write_text('{"name":"ledger-hooks","version":"0.6.1"}')
+        manifest.write_text(json.dumps({"name": "ledger-hooks", "version": min(SUPPORTED_VERSIONS)}))
         (root / "ledger").symlink_to(plugin / "ledger", target_is_directory=True)
     refused("ledger_plugin_invalid", load_ledger, plugin_check_for(plugin_check, root))
 
@@ -35,10 +36,11 @@ def test_preimported_checkout_ledger_refuses(ledger_rig, tmp_path, monkeypatch):
     checkout = tmp_path / "checkout" / "ledger"
     checkout.mkdir(parents=True)
     source = checkout / "__init__.py"
-    source.write_text('__version__ = "0.6.1"\n')
+    version = min(SUPPORTED_VERSIONS)
+    source.write_text(f'__version__ = "{version}"\n')
     foreign = ModuleType("ledger")
     foreign.__file__ = str(source)
-    foreign.__version__ = "0.6.1"
+    foreign.__version__ = version
     monkeypatch.setitem(sys.modules, "ledger", foreign)
     refused("ledger_origin_invalid", load_ledger, ledger_rig.plugin_check)
 

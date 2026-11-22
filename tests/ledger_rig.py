@@ -1,10 +1,11 @@
-"""Temporary ledgers and real v0.6.1 writers; only GitHub is faked."""
+"""Temporary ledgers and real writers of the installed ledger; only GitHub is faked."""
 from __future__ import annotations
 
 import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,8 +15,16 @@ import pytest
 
 from rig import ITEM, Repo, FakeGh, Result, make_store, write_roots
 from review_gate.github import files_digest
+from review_gate.ledger_runtime import SUPPORTED_VERSIONS
 from review_gate.records import Subject
 from review_gate.store import StoreCheck
+
+
+def installed_version(package):
+    """The ``__version__`` the installed ledger package declares, read as text so nothing is imported."""
+    found = re.search(r'^__version__ = "([^"]+)"$', (Path(package) / "__init__.py").read_text(), re.M)
+    assert found, "the installed ledger declares no __version__"
+    return found.group(1)
 
 
 def plugin_check_for(check, *entries):
@@ -32,7 +41,7 @@ def plugin_check(tmp_path_factory):
     # The loader refuses a plugin root under a temp root, so this check names its
     # own temp and sandbox roots, as make_store does for the database.
     spec = importlib.util.find_spec("ledger")
-    assert spec is not None, "install ledger v0.6.1 before running tests"
+    assert spec is not None, "install an accepted ledger version before running tests"
     source = Path(spec.origin).parent
     base = Path(os.path.realpath(tmp_path_factory.mktemp("plugin")))
     root = base / "ledger-hooks"
@@ -40,7 +49,7 @@ def plugin_check(tmp_path_factory):
     shutil.copytree(source, root / "ledger", ignore=shutil.ignore_patterns("__pycache__", "tests"))
     metadata = root / ".claude-plugin"
     metadata.mkdir()
-    (metadata / "plugin.json").write_text(json.dumps({"name": "ledger-hooks", "version": "0.6.1"}))
+    (metadata / "plugin.json").write_text(json.dumps({"name": "ledger-hooks", "version": installed_version(source)}))
     lane_tmp = base / "lane-tmp"
     lane_tmp.mkdir()
     home = base / "home"
@@ -53,7 +62,8 @@ def plugin_check(tmp_path_factory):
     )
     from review_gate.ledger_runtime import load_ledger
     ledger = load_ledger(check)
-    assert ledger.__version__ == "0.6.1"
+    assert ledger.__version__ in SUPPORTED_VERSIONS
+    assert ledger.__version__ == json.loads((metadata / "plugin.json").read_text())["version"]
     yield check
     shutil.rmtree(root)
 
