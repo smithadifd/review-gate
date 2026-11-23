@@ -8,4 +8,4 @@ records port. The shipped records port is unfilled: every call on it refuses
 ``records_unavailable``, so this release never merges anything.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
