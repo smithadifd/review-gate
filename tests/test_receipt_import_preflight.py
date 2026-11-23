@@ -12,6 +12,8 @@ from review_gate.grammar import parse_import_args
 from review_gate.receipt_import import run
 from review_gate.refusal import Refusal
 from test_receipt_import import events, store
+from test_receipt_runner_documents import (follow_ups, other_lane, shape_block_and_harden,
+                                           shape_second_hop, shape_two_origins, waivers)
 from test_receipt_writer import document, write
 
 BLOCK = {"block": 1, "harden": 0, "nit": 0}
@@ -172,6 +174,38 @@ def test_import_refuses_a_carried_entry_whose_prior_lacks_its_root_before_writin
     directory = store(r, [first, document(r, round=2, prior_receipt={"sha256": digest(first)},
                                           blocks_carried=[entry], open_bugs=1, cells=BLOCK)])
     refused_before_writing(r, directory, "receipt_carried_root_missing")
+
+
+# Several entries on one root: the importer checks the first hop, and every receipt it
+# writes reads through the merge ports under the origin.
+
+def sol_receipts(r):
+    return [e for e in receipts(r) if e.payload["lane"] == "sol"]
+
+
+def test_import_of_a_block_and_a_harden_on_one_root_merges_under_the_origin(ledger_rig):
+    r = ledger_rig
+    code, out, err = run_import(r, str(store(r, shape_block_and_harden(r) + [other_lane(r)])))
+    assert code == 0 and "written=4" in out, err
+    first, second, third = sol_receipts(r)
+    origin = first.payload["findings"][0]["id"]
+    assert waivers(r, origin) == [(origin, [second.id, first.id])]
+    assert follow_ups(r, origin) == [(origin, [second.id, first.id])]
+
+
+def test_import_of_several_entries_one_round_behind_the_prior_merges(ledger_rig):
+    """The newest round's prior holds one entry on the root, so only the merge port meets the two."""
+    r = ledger_rig
+    code, out, err = run_import(r, str(store(r, shape_second_hop(r) + [other_lane(r)])))
+    assert code == 0 and "written=5" in out, err
+    first, second, third, _ = sol_receipts(r)
+    origin = first.payload["findings"][0]["id"]
+    assert waivers(r, origin) == [(origin, [third.id, second.id, first.id])]
+
+
+def test_import_refuses_entries_on_one_root_with_two_origins_before_writing(ledger_rig):
+    r = ledger_rig
+    refused_before_writing(r, store(r, shape_two_origins(r)), "receipt_carried_root_missing")
 
 
 # The import's own checks.

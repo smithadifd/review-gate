@@ -7,6 +7,7 @@ import hashlib
 import os
 from typing import Any, NamedTuple
 
+from .carried_root import carried_origin, entries_on_root, root_of
 from .ledger_runtime import ledger_module
 from .receipt_document import COMMIT, derive_document
 from .records import Subject
@@ -65,11 +66,11 @@ def prepare_receipt(derived, data, events, *, base, imported_from=None):
         fields["prior_receipt"] = prior.id
         for position in derived.carried:
             finding = fields["findings"][position]
-            root = finding["id"].rsplit("#", 1)[1]
-            matches = [f for f in prior.payload.get("findings", []) if f["id"].rsplit("#", 1)[1] == root]
-            if len(matches) != 1:
-                refuse("receipt_carried_root_missing", finding["id"])
             finding["carried_from"] = prior.id
+            # One entry on the root links as before. None, or several that do not
+            # all reach one origin, refuses receipt_carried_root_missing.
+            if len(entries_on_root(prior, root_of(finding["id"]))) != 1:
+                carried_origin(finding, history)
     if derived.source is not None:
         source = by_digest(derived.source, "receipt_supersedes_mismatch")
         older = [e for e in same if retry is None or e.id < retry.id]

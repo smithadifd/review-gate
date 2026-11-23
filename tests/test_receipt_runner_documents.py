@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+from rig import ITEM
 from review_gate.refusal import Refusal
 from test_receipt_import import events, invoke, store
 from test_receipt_writer import document, write
@@ -383,3 +384,202 @@ def test_every_carried_block_is_a_block_entry_of_the_event(ledger_rig):
                         cells=cells(block=2, nit=1), open_bugs=2)
     event = write(r, data)
     assert blocks(event) == event.payload["open_bugs"] == json.loads(data)["open_bugs"] == 2
+
+
+# C4: a prior event with several entries on one root. Each one is followed
+# through its carried_from links; the entry writes and merges only when they all
+# reach one origin, whose id is then the waiver id and the hardening source.
+
+def counted(r, round_=1, prior=None, findings=(), **lists):
+    """A counted sol document; ``prior`` is the previous round's document digest."""
+    own = {name: sum(f["cell"] == name for f in findings) for name in ("block", "harden", "nit")}
+    counts = dict(own, block=own["block"] + len(lists.get("blocks_carried", [])))
+    changes = dict(lists, findings=list(findings), cells=counts, open_bugs=counts["block"], round=round_)
+    if prior is not None:
+        changes["prior_receipt"] = {"sha256": prior}
+    return document(r, **changes)
+
+
+def moved(raised, cell, line):
+    """A carried copy of ``raised`` at another line, keeping its first-raise root."""
+    return dict(raised, cell=cell, line=line, residual_root=root(raised["file"], raised["line"], raised["description"]))
+
+
+def other_lane(r):
+    """A second deciding lane, so the merge ports read the sol lane's newest round."""
+    return document(r, lane="claude", served_model="claude-opus-x")
+
+
+def shape_block_and_harden(r):
+    """(a) Round 2 holds a block and a harden on the round 1 root; round 3 carries both again."""
+    bug = entry("Open bug", "block", line=10)
+    first = counted(r, findings=[bug])
+    second = counted(r, 2, sha(first), blocks_carried=[moved(bug, "block", 11)],
+                     hardened_carried=[moved(bug, "harden", 12)])
+    third = counted(r, 3, sha(second), blocks_carried=[moved(bug, "block", 13)],
+                    hardened_carried=[moved(bug, "harden", 14)])
+    return [first, second, third]
+
+
+def shape_second_hop(r):
+    """(e) The event with two entries on the root is one round behind the prior."""
+    bug = entry("Open bug", "block", line=50)
+    first = counted(r, findings=[bug])
+    second = counted(r, 2, sha(first), blocks_carried=[moved(bug, "block", 51)],
+                     hardened_carried=[moved(bug, "harden", 52)])
+    third = counted(r, 3, sha(second), blocks_carried=[moved(bug, "block", 53)])
+    fourth = counted(r, 4, sha(third), blocks_carried=[moved(bug, "block", 54)])
+    return [first, second, third, fourth]
+
+
+def shape_two_origins(r):
+    """(f) Two own findings of round 1 on one root: the second names the first's root
+    and no residual_of, so each is an origin with its own id."""
+    bug = entry("Open bug", "block", line=60)
+    other = entry("Other bug", "block", line=61, residual_root=root("f.py", 60, "Open bug"))
+    first = counted(r, findings=[bug, other])
+    second = counted(r, 2, sha(first), blocks_carried=[moved(bug, "block", 62)])
+    return [first, second]
+
+
+def several_detail(finding_id):
+    return f"{finding_id}: root matches several entries that do not reach one origin"
+
+
+def waivers(r, origin):
+    """open_bugs with only ``origin``'s waiver standing: (finding id, history event ids) per block."""
+    from review_gate.records import waiver_grant_id
+    r.grant(waiver_grant_id(r.subject.repo, r.subject.number, origin))
+    return [(finding, [h[0] for h in history]) for finding, history, _ in r.port.open_bugs(r.subject, ITEM)[1]]
+
+
+def follow_ups(r, origin):
+    """hardening with one child whose source is ``origin``: (finding id, history event ids) per harden."""
+    r.append("item.created", {"type": "ticket", "title": "Follow-up", "source": f"{ITEM}:harden:{origin}"},
+             item="it-followup")
+    r.append("item.linked", {"rel": "child-of", "target": ITEM}, item="it-followup")
+    return [(finding, [h[0] for h in history]) for finding, history, _ in r.port.hardening(r.subject, ITEM)[1]]
+
+
+def test_a_block_and_a_harden_on_one_root_merge_under_the_origin(ledger_rig):
+    r = ledger_rig
+    first, second, third = [write(r, data) for data in shape_block_and_harden(r)]
+    write(r, other_lane(r))
+    origin = first.payload["findings"][0]["id"]
+    assert len({f["id"] for f in second.payload["findings"]}) == 2
+    assert [f["carried_from"] for f in third.payload["findings"]] == [second.id, second.id]
+    assert waivers(r, origin) == [(origin, [second.id, first.id])]
+    assert follow_ups(r, origin) == [(origin, [second.id, first.id])]
+
+
+def test_two_nits_on_one_root_reach_one_origin(ledger_rig):
+    """Both prior entries are nits, so only their common origin links the carried nit."""
+    from review_gate.carried_root import carried_origin
+    r = ledger_rig
+    nit = entry("Tidy this", "nit", line=20)
+    first = first_round(r, [nit])
+    key = root("f.py", 20, "Tidy this")
+    second = write(r, counted(r, 2, first.payload["doc_sha256"], findings=[residual(dict(nit, line=21), "nit", key)],
+                              nits_carried=[moved(nit, "nit", 22)]))
+    assert [f["cell"] for f in second.payload["findings"]] == ["nit", "nit"]
+    third = write(r, counted(r, 3, second.payload["doc_sha256"], nits_carried=[moved(nit, "nit", 23)]))
+    finding = third.payload["findings"][0]
+    assert finding["carried_from"] == second.id
+    origin, visited = carried_origin(finding, [e for e in events(r) if e.kind == "review.receipt"])
+    assert (origin, [e.id for e in visited]) == (first.payload["findings"][0]["id"], [second.id, first.id])
+
+
+def test_two_hardens_on_one_root_carried_again_share_one_follow_up(ledger_rig):
+    r = ledger_rig
+    harden = entry("Harden this", "harden", line=30)
+    first = first_round(r, [harden])
+    second = write(r, counted(r, 2, first.payload["doc_sha256"],
+                              hardened_carried=[moved(harden, "harden", 32), moved(harden, "harden", 34)]))
+    third = write(r, counted(r, 3, second.payload["doc_sha256"],
+                             hardened_carried=[moved(harden, "harden", 36), moved(harden, "harden", 38)]))
+    write(r, other_lane(r))
+    assert [f["carried_from"] for f in third.payload["findings"]] == [second.id, second.id]
+    origin = first.payload["findings"][0]["id"]
+    assert follow_ups(r, origin) == [(origin, [second.id, first.id])] * 2
+
+
+def test_one_carried_id_in_two_lists_against_a_nit_and_a_block(ledger_rig):
+    r = ledger_rig
+    bug = entry("Open bug", "block", line=40)
+    first = first_round(r, [bug])
+    second = write(r, counted(r, 2, first.payload["doc_sha256"], blocks_carried=[moved(bug, "block", 41)],
+                              nits_carried=[moved(bug, "nit", 42)]))
+    assert sorted(f["cell"] for f in second.payload["findings"]) == ["block", "nit"]
+    third = write(r, counted(r, 3, second.payload["doc_sha256"], blocks_carried=[moved(bug, "block", 43)],
+                             nits_carried=[moved(bug, "nit", 43)]))
+    write(r, other_lane(r))
+    origin = first.payload["findings"][0]["id"]
+    ident = "f.py:43#" + origin.rsplit("#", 1)[1]
+    assert third.payload["findings"] == [{"id": ident, "cell": "block", "carried_from": second.id}]
+    assert waivers(r, origin) == [(origin, [second.id, first.id])]
+
+
+def test_several_entries_one_round_behind_the_prior_merge(ledger_rig):
+    r = ledger_rig
+    first, second, third, fourth = [write(r, data) for data in shape_second_hop(r)]
+    write(r, other_lane(r))
+    assert [f["carried_from"] for f in fourth.payload["findings"]] == [third.id]
+    origin = first.payload["findings"][0]["id"]
+    assert waivers(r, origin) == [(origin, [third.id, second.id, first.id])]
+
+
+def test_entries_on_one_root_with_two_origins_refuse(ledger_rig):
+    r = ledger_rig
+    first, second = shape_two_origins(r)
+    origins = [f["id"] for f in write(r, first).payload["findings"]]
+    assert len(origins) == 2 and len({i.rsplit("#", 1)[1] for i in origins}) == 1
+    carried = "f.py:62#" + origins[0].rsplit("#", 1)[1]
+    refuses(r, "receipt_carried_root_missing", second, several_detail(carried))
+
+
+@pytest.mark.parametrize("damage", ["missing", "cycle"])
+def test_one_broken_branch_refuses_though_another_reaches_the_origin(ledger_rig, damage):
+    from test_ledger_records import corrupt_event
+    r = ledger_rig
+    first, second, third = [write(r, data) for data in shape_block_and_harden(r)]
+    write(r, other_lane(r))
+    findings = [dict(f) for f in second.payload["findings"]]
+    broken = next(f for f in findings if f["cell"] == "harden")
+    broken["carried_from"] = 999999 if damage == "missing" else second.id
+    corrupt_event(r, second.id, payload=dict(second.payload, findings=findings))
+    detail = broken["id"] if damage == "missing" else "carried finding cycle"
+    for port in (r.port.open_bugs, r.port.hardening):
+        with pytest.raises(Refusal) as exc:
+            port(r.subject, ITEM)
+        assert (exc.value.name, exc.value.detail) == ("receipt_carried_root_missing", detail), exc.value.line()
+
+
+def test_an_own_finding_and_a_carried_copy_on_one_id_merge_with_both_events(ledger_rig):
+    """Round 2 raises the round 1 finding again (same id, not carried) and carries it at a
+    moved line. The own finding's branch ends in round 2; the history still names round 1."""
+    r = ledger_rig
+    bug = entry("Open bug", "block", line=70)
+    first = first_round(r, [bug])
+    second = write(r, counted(r, 2, first.payload["doc_sha256"], findings=[dict(bug)],
+                              blocks_carried=[moved(bug, "block", 71)]))
+    origin = first.payload["findings"][0]["id"]
+    assert second.payload["findings"][0] == {"id": origin, "cell": "block"}
+    write(r, counted(r, 3, second.payload["doc_sha256"], blocks_carried=[moved(bug, "block", 72)]))
+    write(r, other_lane(r))
+    assert waivers(r, origin) == [(origin, [second.id, first.id])]
+
+
+def test_several_entries_at_two_hops_in_a_row_merge(ledger_rig):
+    r = ledger_rig
+    bug = entry("Open bug", "block", line=80)
+    events_ = [first_round(r, [bug])]
+    for round_, line in ((2, 81), (3, 83), (4, 85)):
+        events_.append(write(r, counted(r, round_, events_[-1].payload["doc_sha256"],
+                                        blocks_carried=[moved(bug, "block", line)],
+                                        hardened_carried=[moved(bug, "harden", line + 1)])))
+    write(r, other_lane(r))
+    first, second, third, _ = events_
+    origin = first.payload["findings"][0]["id"]
+    history = [third.id, second.id, first.id]
+    assert waivers(r, origin) == [(origin, history)]
+    assert follow_ups(r, origin) == [(origin, history)]

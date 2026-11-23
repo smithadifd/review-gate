@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **A carried finding whose prior receipt holds several entries on its root records and merges when they all reach one origin.** A runner can record two entries on one root at different lines in one round, for example a carried block and a carried harden of one earlier finding. The next round's carried entry on that root used to refuse `receipt_carried_root_missing` in the writer and at the merge port. Now the writer, the import check and the merge port's open-bug and hardening reads follow every entry on the root through its `carried_from` link, over the stored receipt events alone, and accept only when every branch ends at one origin finding id. That id is the waiver id and the hardening source, and the history is every receipt the walk visited, newest first. Nothing is chosen by cell, line or description. Entries that reach different origins refuse `receipt_carried_root_missing` with the detail `<finding id>: root matches several entries that do not reach one origin`; no entry on the root, a link to no receipt, and a cycle refuse as before.
+- **One waiver covers every block on one root, and one follow-up item every harden on it.** Every entry on a root shares its origin, so two carried blocks on one root need one waiver and two carried hardens on it need one follow-up item. v0.2.1 already behaved this way one round earlier, where each entry reached the origin through a single match.
+
 ## 0.2.1 — 2026-11-23
 
 The receipt writer now records the receipt documents the review runner publishes and its merge reader counts.
