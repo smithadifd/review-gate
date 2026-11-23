@@ -201,10 +201,11 @@ def derive_document(data):
                 listed.add(ident)
                 is_carried = key != "findings" or entry.get("residual_of") is not None
                 if is_carried:
-                    # The reader asks for a root on a finding with residual_of, a
-                    # located nits_carried entry and (here) every hardened_carried
-                    # entry; any other carried entry links through its own id's root.
-                    rootless = key == "blocks_carried" or (key == "nits_carried" and entry.get("line") is None)
+                    # The reader asks for a root on a finding with residual_of and on a
+                    # located nits_carried entry; any other carried entry (blocks_carried,
+                    # hardened_carried, an unlocated nit) links through its own id's root.
+                    rootless = (key in ("blocks_carried", "hardened_carried")
+                                or (key == "nits_carried" and entry.get("line") is None))
                     _shape(prior is not None and (rootless or entry.get("residual_root") is not None),
                            "carried root")
                 held = merged.get(ident)

@@ -281,13 +281,27 @@ def test_a_located_carried_block_without_a_root_links_through_its_own_id(ledger_
 
 
 @pytest.mark.parametrize("absent", ["missing", "null"])
-@pytest.mark.parametrize("key", ["nits_carried", "hardened_carried"])
-def test_a_located_carried_nit_or_harden_without_a_root_refuses(ledger_rig, key, absent):
+def test_a_located_carried_nit_without_a_root_refuses(ledger_rig, absent):
     r = ledger_rig
-    raised = entry("Located", "nit" if key == "nits_carried" else "harden", line=3)
+    raised = entry("Located", "nit", line=3)
     first = first_round(r, [raised])
     refuses(r, "receipt_document_shape",
-            second_round(r, first, **{key: [unlocated_copy(raised, key, absent)]}), "carried root")
+            second_round(r, first, nits_carried=[unlocated_copy(raised, "nits_carried", absent)]),
+            "carried root")
+
+
+@pytest.mark.parametrize("absent", ["missing", "null"])
+@pytest.mark.parametrize("located", [True, False], ids=["located", "unlocated"])
+def test_a_carried_harden_without_a_root_links_through_its_own_id(ledger_rig, located, absent):
+    r = ledger_rig
+    raised = (entry("Located", "harden", line=3) if located
+              else {"file": None, "line": None, "description": "No locator", "cell": "harden"})
+    first = first_round(r, [raised])
+    data = second_round(r, first, hardened_carried=[unlocated_copy(raised, "hardened_carried", absent)])
+    event = write(r, data)
+    assert event.payload["findings"] == [
+        {"id": first.payload["findings"][0]["id"], "cell": "harden", "carried_from": first.id}]
+    assert event.payload["open_bugs"] == json.loads(data)["open_bugs"] == blocks(event) == 0
 
 
 def test_a_residual_finding_without_a_root_refuses(ledger_rig):
