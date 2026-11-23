@@ -19,6 +19,11 @@ ROOT = re.compile(r"[^\s:#]+:[1-9][0-9]*@[0-9a-f]{16}")
 TOKEN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 CAP = 65536
 SOURCES = ("settled_from", "adjudicated_from", "reparsed_from")
+# Each carried list's cell: an entry of the list takes it, and one recorded in
+# another cell refuses.
+LIST_CELLS = {"hardened_carried": "harden", "blocks_carried": "block", "nits_carried": "nit"}
+# Entries on one id across lists merge into the most severe cell.
+SEVERITY = {"nit": 0, "harden": 1, "block": 2}
 
 
 def parse_document(data):
@@ -81,6 +86,11 @@ def finding_id(entry):
     path, line = entry.get("file"), entry.get("line")
     if path is None and line is None:
         path, line = "/unlocated", 1
+    elif line is None and type(path) is str and path and not any(c.isspace() for c in path):
+        # A file with no line: the id binds the file and the description, never a
+        # position, so a finding and its carried copy keep one id. A file with
+        # whitespace keeps v0.2.0's refusal.
+        path, line = f"/unlocated/{path}", 1
     _shape(type(path) is str and bool(path) and type(line) is int and line >= 1, "finding locator")
     try:
         waiver_grant_id("example/repo", 1, f"{path}:{line}#root")
@@ -98,6 +108,16 @@ def finding_id(entry):
     return ident
 
 
+def _located_key(entry):
+    """(file, line, description) of a located entry, else None: the reader's resolved match."""
+    if type(entry) is not dict:
+        return None
+    path, line, description = entry.get("file"), entry.get("line"), entry.get("description")
+    if type(path) is str and type(line) is int and line >= 1 and type(description) is str:
+        return path, line, description
+    return None
+
+
 @dataclass(frozen=True)
 class DerivedReceipt:
     document: dict
@@ -105,6 +125,7 @@ class DerivedReceipt:
     carried: tuple
     prior: str | None
     source: str | None
+    adjudicated: str | None = None
 
 
 def derive_document(data):
@@ -142,48 +163,74 @@ def derive_document(data):
         refuse("receipt_family_mismatch", "family has no served_model")
     prior = document_digest(doc.get("prior_receipt"), "prior_receipt") if fields["round"] >= 2 else None
     _shape(fields["round"] >= 2 or "prior_receipt" not in doc, "prior_receipt at round 1")
+    # One source, or a settled sibling of an adjudication: settling copies the
+    # adjudication whole, so it keeps adjudicated_from and adds settled_from, the
+    # source it supersedes. Any other pair, and all three, refuse.
     sources = [key for key in SOURCES if key in doc]
-    _shape(len(sources) <= 1, "one sibling source")
+    _shape(len(sources) <= 1 or sources == ["settled_from", "adjudicated_from"], "sibling source")
     source = document_digest(doc[sources[0]], sources[0]) if sources else None
+    adjudicated = document_digest(doc["adjudicated_from"], "adjudicated_from") if len(sources) == 2 else None
     carried = []
     if verdict in ("approved", "changes_requested"):
         _shape(model is not None and doc.get("severity_rubric") == "v2", "counted document")
-        entries = []
         for key in ("findings", "hardened_carried"):
             _shape(type(doc.get(key)) is list, key)
         for key in ("blocks_carried", "nits_carried", "resolved_carried", "standing_carried", "unsettled_carried"):
             _shape(key not in doc or type(doc[key]) is list, key)
-        resolved = doc.get("resolved_carried", [])
+        # The reader's resolved match: located entries only, exact (file, line, description).
+        resolved = {_located_key(fixed) for fixed in doc.get("resolved_carried", [])} - {None}
+        own = dict.fromkeys(CELLS, 0)
+        merged = {}
         for key in ("findings", "hardened_carried", "blocks_carried", "nits_carried"):
+            listed = set()
             for entry in doc.get(key, []):
                 _shape(type(entry) is dict, key)
-                if key == "hardened_carried" and any(
-                    all(entry.get(k) == fixed.get(k) for k in ("file", "line", "description"))
-                    for fixed in resolved if type(fixed) is dict):
+                cell = entry.get("cell")
+                if cell not in CELLS:
+                    refuse("receipt_cell_unknown", "a finding has no known cell")
+                if key == "hardened_carried" and _located_key(entry) in resolved:
                     continue
-                entries.append((entry, key != "findings" or entry.get("residual_of") is not None))
-        findings, seen = [], set()
-        counts = dict.fromkeys(CELLS, 0)
-        for entry, is_carried in entries:
-            cell = entry.get("cell")
-            if cell not in CELLS:
-                refuse("receipt_cell_unknown", "a finding has no known cell")
-            ident = finding_id(entry)
-            if ident in seen:
-                refuse("receipt_finding_duplicate", ident)
-            seen.add(ident)
-            counts[cell] += 1
-            findings.append({"id": ident, "cell": cell})
-            if is_carried:
-                _shape(prior is not None and entry.get("residual_root") is not None, "carried root")
-                carried.append(len(findings) - 1)
+                listed_cell = LIST_CELLS.get(key, cell)
+                if cell != listed_cell:
+                    refuse("receipt_document_inconsistent", f"a {key} entry is not in the {listed_cell} cell")
+                if key == "findings":
+                    own[cell] += 1
+                ident = finding_id(entry)
+                if ident in listed:
+                    refuse("receipt_finding_duplicate", ident)
+                listed.add(ident)
+                is_carried = key != "findings" or entry.get("residual_of") is not None
+                if is_carried:
+                    # The reader asks for a root on a finding with residual_of, a
+                    # located nits_carried entry and (here) every hardened_carried
+                    # entry; any other carried entry links through its own id's root.
+                    rootless = key == "blocks_carried" or (key == "nits_carried" and entry.get("line") is None)
+                    _shape(prior is not None and (rootless or entry.get("residual_root") is not None),
+                           "carried root")
+                held = merged.get(ident)
+                if held is None:
+                    merged[ident] = [listed_cell, is_carried]
+                    continue
+                if held[0] == "block" and listed_cell == "block":
+                    # One entry for two open BUGs would leave open_bugs below the document's.
+                    refuse("receipt_finding_duplicate", ident)
+                if SEVERITY[listed_cell] > SEVERITY[held[0]]:
+                    held[0] = listed_cell
+                held[1] = held[1] or is_carried
         cells = doc.get("cells")
         _shape(type(cells) is dict and set(cells) == set(CELLS)
                and all(type(v) is int and v >= 0 for v in cells.values()), "cells")
         _shape(type(doc.get("open_bugs")) is int and doc["open_bugs"] >= 0, "open_bugs")
-        if cells != counts or doc["open_bugs"] != counts["block"]:
+        # The reader's rule: block is the own block findings plus every carried
+        # block; harden and nit count own findings only; open_bugs is block.
+        expected = dict(own, block=own["block"] + len(doc.get("blocks_carried", [])))
+        if cells != expected or doc["open_bugs"] != expected["block"]:
             refuse("receipt_document_inconsistent", "cells or open_bugs disagree with the entries")
-        fields.update(findings=findings, open_bugs=counts["block"])
+        findings = [{"id": ident, "cell": cell} for ident, (cell, _) in merged.items()]
+        if sum(finding["cell"] == "block" for finding in findings) != doc["open_bugs"]:
+            refuse("receipt_document_inconsistent", "the event's block entries disagree with open_bugs")
+        carried = [position for position, (_, is_carried) in enumerate(merged.values()) if is_carried]
+        fields.update(findings=findings, open_bugs=doc["open_bugs"])
     else:
         _shape(doc.get("open_bugs") is None and not doc.get("findings"), "failed verdict counts")
-    return DerivedReceipt(doc, fields, tuple(carried), prior, source)
+    return DerivedReceipt(doc, fields, tuple(carried), prior, source, adjudicated)

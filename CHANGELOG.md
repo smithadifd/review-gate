@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+The receipt writer now records the receipt documents the review runner publishes and its merge reader counts.
+
+- **Carried hardens and nits enter no cell.** `cells.block` is the own block findings plus every `blocks_carried` entry, `cells.harden` and `cells.nit` count own findings only, and `open_bugs` equals `cells.block`. A document that disagrees, or whose event would hold a different number of block entries than its `open_bugs`, refuses `receipt_document_inconsistent`. So does an entry of `hardened_carried`, `blocks_carried` or `nits_carried` whose cell is not its list's (for `hardened_carried` this is stricter than the runner's reader).
+- **One event entry per finding id.** The same id in two lists, such as a nit finding that matched a block still carried, is one entry with the most severe cell, carried when any of its entries is. An id twice in one list, and two block entries on one id, refuse `receipt_finding_duplicate`. A harden entry that shares an id with a block is recorded as the block only.
+- **A carried harden is resolved only by a located match**, on exact file, line and description; an unlocated carried harden stays open.
+- **A settled sibling of an adjudication records.** A document may name `settled_from` and `adjudicated_from` together. It supersedes the `settled_from` receipt, and `adjudicated_from` must name the receipt that one supersedes, else `receipt_supersedes_mismatch`. Any other pair of sources, or all three, refuses `receipt_document_shape`.
+- **Some carried entries need no `residual_root`.** A `blocks_carried` entry, and an unlocated `nits_carried` entry, may omit it or give null; the entry links to the prior receipt through the root of its own id, and a prior receipt without that root still refuses `receipt_carried_root_missing`. A located `nits_carried` entry, a `hardened_carried` entry and a finding with `residual_of` still need one.
+- **A finding with a file and no line records.** Its id is `/unlocated/<file>:1#<root>`, a function of the file and the description only, so a finding and its carried copy share it; the same file and description twice in one list refuses `receipt_finding_duplicate`. An entry with neither keeps the `/unlocated:1#<root>` form. An empty file, whitespace in a file, and a line of 0 or a non-integer still refuse.
+
 ## 0.2.0 — 2026-11-22
 
 review-gate now accepts the ledger-hooks versions the public harness default serves, as an exact set, and is installable with a pinned git install.
