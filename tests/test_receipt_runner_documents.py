@@ -196,6 +196,21 @@ def test_an_id_in_findings_and_blocks_carried_is_one_block_entry(ledger_rig, own
     assert event.payload["open_bugs"] == json.loads(data)["open_bugs"] == blocks(event) == 1
 
 
+def test_a_fresh_own_nit_on_a_carried_block_id_keeps_the_entry_carried(ledger_rig):
+    """The own nit has no residual_of, so only the carried block makes the merged entry carried."""
+    r = ledger_rig
+    bug = entry("Open bug", "block", line=3)
+    first = first_round(r, [bug])
+    key = root("f.py", 3, "Open bug")
+    data = second_round(r, first, findings=[entry("Open bug", "nit", line=3)],
+                        blocks_carried=[dict(bug, residual_root=key)],
+                        cells=cells(block=1, nit=1), open_bugs=1)
+    event = write(r, data)
+    ident = first.payload["findings"][0]["id"]
+    assert event.payload["findings"] == [{"id": ident, "cell": "block", "carried_from": first.id}]
+    assert event.payload["open_bugs"] == json.loads(data)["open_bugs"] == blocks(event) == 1
+
+
 def test_a_repeated_nit_in_findings_and_nits_carried_is_one_entry(ledger_rig):
     r = ledger_rig
     nit = entry("Tidy this", "nit", line=4)
