@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import stat
 
+from .carried_root import carried_origin
 from .ledger_runtime import load_ledger, ledger_module
 from .records import DatabasePaths, ask_grant, exception_grant_id, merge_key, review_round_grant_id, waiver_grant_id
 from .refusal import Refusal, refuse
@@ -204,23 +205,11 @@ class LedgerRecords:
             return (tuple(_identity(e) for e in counted), required, proof)
 
     def _root_finding(self, lg, subject, item, event, finding):
-        evidence = []
-        seen = set()
-        while "carried_from" in finding:
-            target = finding["carried_from"]
-            if target in seen:
-                refuse("receipt_carried_root_missing", "carried finding cycle")
-            seen.add(target)
-            events = self._events(lg, subject, item, current=False)
-            source = next((e for e in events if e.id == target), None)
-            root = finding["id"].rsplit("#", 1)[1]
-            matches = [] if source is None else [f for f in source.payload.get("findings", ())
-                                                if f["id"].rsplit("#", 1)[1] == root]
-            if len(matches) != 1:
-                refuse("receipt_carried_root_missing", finding["id"])
-            evidence.append(_identity(source))
-            event, finding = source, matches[0]
-        return finding["id"], tuple(evidence)
+        # The origin id (the waiver id and the hardening source) and the events walked to it.
+        if "carried_from" not in finding:
+            return finding["id"], ()
+        origin, visited = carried_origin(finding, self._events(lg, subject, item, current=False))
+        return origin, tuple(_identity(e) for e in visited)
 
     def open_bugs(self, subject, item):
         with self._open() as lg:

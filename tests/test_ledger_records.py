@@ -173,6 +173,64 @@ def test_carried_root_is_exact(ledger_rig, cell):
     refused("receipt_carried_root_missing", getattr(r.port, "open_bugs" if cell == "block" else "hardening"), r.subject, ITEM)
 
 
+def root_walk(r, cell):
+    """The merge port's answer for the newest sol round: (finding id, history event ids) per entry."""
+    if cell == "block":
+        r.grant(waiver_grant_id(r.subject.repo, 7, "f.py:1#root"))
+        answer = r.port.open_bugs(r.subject, ITEM)[1]
+    else:
+        r.append("item.created", {"type": "ticket", "title": "Follow-up",
+                 "source": f"{ITEM}:harden:f.py:1#root"}, item="it-followup")
+        r.append("item.linked", {"rel": "child-of", "target": ITEM}, item="it-followup")
+        answer = r.port.hardening(r.subject, ITEM)[1]
+    return [(finding, [h[0] for h in history]) for finding, history, _ in answer]
+
+
+def refused_with(detail, call, *args):
+    with pytest.raises(Refusal) as exc:
+        call(*args)
+    assert (exc.value.name, exc.value.detail) == ("receipt_carried_root_missing", detail), exc.value.line()
+
+
+@pytest.mark.parametrize("cell", ["block", "harden"])
+def test_entries_on_one_root_that_reach_one_origin_merge(ledger_rig, cell):
+    """Appended by the ledger's own writer, so only the merge port walks them."""
+    r = ledger_rig
+    first = r.receipt(findings=[{"id": "f.py:1#root", "cell": cell}])
+    second = r.receipt(round_=2, prior_receipt=first.id, findings=[
+        {"id": "f.py:2#root", "cell": "harden", "carried_from": first.id},
+        {"id": "f.py:3#root", "cell": "nit", "carried_from": first.id}])
+    r.receipt(round_=3, prior_receipt=second.id,
+              findings=[{"id": "f.py:4#root", "cell": cell, "carried_from": second.id}])
+    r.receipt("claude")
+    assert root_walk(r, cell) == [("f.py:1#root", [second.id, first.id])]
+
+
+@pytest.mark.parametrize("cell", ["block", "harden"])
+def test_entries_on_one_root_with_two_origins_refuse_at_the_merge_port(ledger_rig, cell):
+    r = ledger_rig
+    first = r.receipt(findings=[{"id": "f.py:1#root", "cell": cell}, {"id": "f.py:2#root", "cell": "nit"}])
+    r.receipt(round_=2, prior_receipt=first.id,
+              findings=[{"id": "f.py:3#root", "cell": cell, "carried_from": first.id}])
+    r.receipt("claude")
+    refused_with("f.py:3#root: root matches several entries that do not reach one origin",
+                 root_walk, r, cell)
+
+
+@pytest.mark.parametrize("cell", ["block", "harden"])
+def test_a_branch_to_an_event_without_the_root_refuses(ledger_rig, cell):
+    r = ledger_rig
+    other = r.receipt("other", findings=[{"id": "h.py:1#other", "cell": "nit"}])
+    first = r.receipt(findings=[{"id": "f.py:1#root", "cell": cell}])
+    second = r.receipt(round_=2, prior_receipt=first.id, findings=[
+        {"id": "f.py:2#root", "cell": "nit", "carried_from": first.id},
+        {"id": "f.py:3#root", "cell": "nit", "carried_from": other.id}])
+    r.receipt(round_=3, prior_receipt=second.id,
+              findings=[{"id": "f.py:4#root", "cell": cell, "carried_from": second.id}])
+    r.receipt("claude")
+    refused_with("f.py:3#root", root_walk, r, cell)
+
+
 def test_hardening_needs_exact_current_child_not_closing_item(ledger_rig):
     r = ledger_rig
     r.receipt(findings=[{"id": "f.py:1#x", "cell": "harden"}])
