@@ -75,6 +75,12 @@ def prepare_receipt(derived, data, events, *, base, imported_from=None):
         older = [e for e in same if retry is None or e.id < retry.id]
         if not older or source.id != max(e.id for e in older):
             refuse("receipt_supersedes_mismatch", "source is not the newest document in this slot")
+        if derived.adjudicated is not None:
+            # A settled sibling of an adjudication: adjudicated_from must name the
+            # event its source (the adjudication) supersedes.
+            adjudicated = by_digest(derived.adjudicated, "receipt_supersedes_mismatch")
+            if source.payload.get("supersedes") != adjudicated.id:
+                refuse("receipt_supersedes_mismatch", "adjudicated_from is not the event the source supersedes")
         fields["supersedes"] = source.id
     if (fields["round"] == 1 and retry is None and not same and derived.source is None
             and any(e.payload["lane"] == fields["lane"] for e in relevant)):
