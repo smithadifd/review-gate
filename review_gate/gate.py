@@ -1,7 +1,7 @@
-"""The merge command's stage sequencer.
+"""The merge and read-only check commands' shared stage sequencer.
 
-Stages run in ``STAGE_ORDER``, every one of them, and any refusal stops the
-run before the next:
+Stages run in ``STAGE_ORDER``; check stops after recheck, merge runs every
+stage, and any refusal stops the run before the next:
 
 0. arguments (``grammar``), before any read of GitHub, the records port or
    the filesystem;
@@ -21,6 +21,8 @@ run before the next:
 Output: exit 0 with one stdout line on a confirmed, recorded merge; exit 2
 with one stderr line starting with the refusal's name when nothing was
 merged; exit 4 when a merge call was made and its outcome is not confirmed.
+Check exits 0 with ``would-merge <URL> head=<sha>`` after stage 10, or 2
+on refusal; it never enters stage 11.
 Any error that escapes a stage is reported as a named refusal
 (``internal_error``), never a traceback.
 """
@@ -30,7 +32,7 @@ from dataclasses import dataclass, field
 
 from .ci import stage_ci
 from .github import compare_state, files_digest, read_files, read_state, state_gate, base_in_head
-from .grammar import ITEM_ID, MergeArgs, parse_merge_args
+from .grammar import ITEM_ID, MergeArgs, parse_check_args, parse_merge_args
 from .main_green import stage_main_green
 from .merge import UNCONFIRMED, stage_merge
 from .records import GrantProof, Subject, ask_grant, port_call
@@ -187,9 +189,20 @@ def run(argv, *, records, gh, store_check, out, err, ci_stage=stage_ci) -> int:
     or a ``GrantProof`` in ``no_ci_grant`` and an empty ``expected`` dict.
     The sequencer checks that shape before stage 9; return the command's exit code.
     """
+    return _run(argv, records=records, gh=gh, store_check=store_check, out=out, err=err,
+                ci_stage=ci_stage, parse_args=parse_merge_args)
+
+
+def check(argv, *, records, gh, store_check, out, err, ci_stage=stage_ci) -> int:
+    """Run stages 0 to 10 without writes or merging; stage 8 has ``run``'s contract."""
+    return _run(argv, records=records, gh=gh, store_check=store_check, out=out, err=err,
+                ci_stage=ci_stage, parse_args=parse_check_args, stop_after="recheck")
+
+
+def _run(argv, *, records, gh, store_check, out, err, ci_stage, parse_args, stop_after=None) -> int:
     gate = None
     try:
-        args = parse_merge_args(argv)
+        args = parse_args(argv)
         gate = Gate(args=args, records=records, gh=gh, store_check=store_check, out=out, err=err)
         result = None
         for name, stage in STAGES:
@@ -197,9 +210,12 @@ def run(argv, *, records, gh, store_check, out, err, ci_stage=stage_ci) -> int:
             result = (ci_stage if name == "ci" else stage)(gate)
             if name == "ci":
                 _ci_selection(gate)
+            if name == stop_after:
+                out.write(f"would-merge {args.url} head={args.sha}\n")
+                return 0
         return result
     except Refusal as refusal:
-        if gate is not None and gate.merge_called:
+        if stop_after is None and gate is not None and gate.merge_called:
             err.write(f"merge_unconfirmed: {refusal.line()}\n")
             return UNCONFIRMED
         err.write(refusal.line() + "\n")
@@ -207,7 +223,7 @@ def run(argv, *, records, gh, store_check, out, err, ci_stage=stage_ci) -> int:
     except Exception as exc:  # never a traceback
         stage = gate.stage if gate is not None else "arguments"
         detail = " ".join(f"{type(exc).__name__}: {exc}".split())[:300]
-        if gate is not None and gate.merge_called:
+        if stop_after is None and gate is not None and gate.merge_called:
             err.write(f"merge_unconfirmed: internal error at stage {stage}: {detail}\n")
             return UNCONFIRMED
         err.write(f"internal_error: stage {stage}: {detail}\n")
