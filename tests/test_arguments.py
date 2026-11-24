@@ -164,3 +164,41 @@ def test_the_sha_is_compared_never_folded():
     with pytest.raises(Refusal) as refused:
         parse_merge_args(["merge", URL, oid("x").upper(), "--items", ITEM])
     assert refused.value.name == "sha_invalid"
+
+
+@pytest.mark.parametrize("tail", [
+    ["--pr", URL], ["--pr", URL, "--lookup"], ["--lookup", "--pr", URL],
+])
+def test_item_accepted_grammar(tail):
+    from review_gate.grammar import parse_item_args
+    args = parse_item_args(["item", *tail])
+    assert args.pr.url == URL
+    assert args.lookup == ("--lookup" in tail)
+
+
+@pytest.mark.parametrize("tail,reason", [
+    ([], "argument_unknown"),
+    (["--pr"], "argument_unknown"),
+    (["--pr=" + URL], "argument_unknown"),
+    (["--PR", URL], "argument_unknown"),
+    (["--pr", URL, "--Lookup"], "argument_unknown"),
+    (["--pr", URL, "--lookup", "--lookup"], "argument_unknown"),
+    (["--pr", URL, "--pr", URL], "argument_unknown"),
+    (["--pr", URL, "extra"], "argument_unknown"),
+    (["--pr", URL + "/"], "pr_url_invalid"),
+    (["--pr", " " + URL], "pr_url_invalid"),
+    (["--pr", URL + "\n"], "pr_url_invalid"),
+    (["--pr", "- " + URL], "pr_url_invalid"),
+    (["--pr", "```" + URL + "```"], "pr_url_invalid"),
+    (["--pr", URL + "/files"], "pr_url_invalid"),
+])
+def test_item_near_misses_refuse_before_reads(tail, reason):
+    from review_gate.pr_item import run
+    out, err = io.StringIO(), io.StringIO()
+    store = CountingStore()
+    code = run(["item", *tail], records=object(), gh=object(),
+               store_check=store, out=out, err=err)
+    assert code == 2
+    assert err.getvalue().startswith(reason + ":"), err.getvalue()
+    assert out.getvalue() == ""
+    assert store.calls == 0

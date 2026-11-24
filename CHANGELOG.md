@@ -2,6 +2,8 @@
 
 ## 0.2.3 — Unreleased
 
+- Add `review-gate item --pr <URL> [--lookup]`: find the existing pull request item or atomically create one deterministic ticket and PR link. Retries and concurrent calls do not duplicate events. Lookup is read-only and exits 3 with `pr_item_missing` when absent; ambiguity, source conflicts and competing links refuse without writes.
+- Replace manual item creation/linking guidance with the item verb. Raw ledger PR linking still has no cross-item uniqueness guarantee.
 - Merge hardening derives every unresolved harden id from the verified receipt document, including a harden collapsed into a block on the same id. Its exact-source child follow-up remains required even with a standing block waiver. Event/document harden mismatches refuse `receipt_document_inconsistent`; missing, by-path, altered or underivable documents never fall back to event findings.
 
 ## 0.2.2 — 2026-11-23
