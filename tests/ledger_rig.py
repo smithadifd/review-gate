@@ -123,6 +123,66 @@ class LedgerRig:
     def pair(self, **kwargs):
         return self.receipt("sol", **kwargs), self.receipt("claude", **kwargs)
 
+    def writer_receipt(self, **changes):
+        """Attach real runner bytes through review-gate's writer."""
+        from test_receipt_writer import document, write
+        return write(self, document(self, **changes))
+
+    def documented_receipt(self, lane="sol", round_=1, **overrides):
+        """Real document plus raw ledger event for merge-port-only root graph tests."""
+        from ledger import open_ledger
+        from ledger.receipts import write_receipt
+        from review_gate.receipt_document import derive_document
+        from test_receipt_writer import document
+        findings = overrides.pop("findings", [])
+        entries = []
+        for finding in findings:
+            locator, label = finding["id"].split("#")
+            path, line = locator.rsplit(":", 1)
+            entries.append({"file": path, "line": int(line), "description": label,
+                            "cell": finding["cell"], "residual_root": document_root(label)})
+        prior = overrides.pop("prior_receipt", None)
+        changes = dict(lane=lane, round=round_, findings=entries,
+                       served_model="claude-opus-x" if lane == "claude" else "gpt-x",
+                       cells={cell: sum(f["cell"] == cell for f in findings)
+                              for cell in ("block", "harden", "nit")},
+                       open_bugs=sum(f["cell"] == "block" for f in findings))
+        if prior is not None:
+            with open_ledger(self.db, create=False) as lg:
+                event = next(e for e in lg.events() if e.id == prior)
+            changes["prior_receipt"] = {"sha256": event.payload["doc_sha256"]}
+        data = document(self, **changes)
+        fields = dict(derive_document(data).fields, base=self.repo.base_oid, **overrides)
+        if prior is not None:
+            fields["prior_receipt"] = prior
+        for finding, raw in zip(fields["findings"], findings):
+            if "carried_from" in raw:
+                finding["carried_from"] = raw["carried_from"]
+        with open_ledger(self.db, create=False) as lg:
+            return write_receipt(lg, ITEM, fields, data)
+
+    def overlap_receipt(self, *, carried_harden=False):
+        """A block and harden on one id, collapsed by the real writer."""
+        from test_receipt_runner_documents import cells, entry, first_round, residual, root, second_round
+        from test_receipt_writer import write
+        bug = entry("Open finding", "block")
+        first = first_round(self, [bug])
+        key = root("f.py", 1, "Open finding")
+        current = dict(bug, line=2)
+        harden = residual(current, "harden", key)
+        changes = (dict(findings=[residual(current, "block", key)], hardened_carried=[harden],
+                        cells=cells(block=1)) if carried_harden else
+                   dict(findings=[harden], blocks_carried=[dict(current, residual_root=key)],
+                        cells=cells(block=1, harden=1)))
+        event = write(self, second_round(self, first, open_bugs=1, **changes))
+        self.writer_receipt(lane="claude", served_model="claude-opus-x")
+        return first, event
+
+    def followup(self, origin, *, item="it-followup"):
+        self.append("item.created", {"type": "ticket", "title": "Follow-up",
+                    "source": f"{ITEM}:harden:{origin}"}, item=item)
+        self.append("item.linked", {"rel": "child-of", "target": ITEM}, item=item)
+
     def cli(self, *args, stdin=None):
         env = dict(os.environ, PYTHONPATH=str(self.plugin), LEDGER_HARNESS="pytest")
         env.pop("LEDGER_DB", None)
@@ -173,6 +233,19 @@ class LedgerRig:
 
     def merge_calls(self):
         return [c for c in self.fake.calls() if c[:2] == ["pr", "merge"]]
+
+
+def document_root(label):
+    import hashlib
+    return "origin.py:1@" + hashlib.sha256(label.encode()).hexdigest()[:16]
+
+
+def document_id(ident):
+    from review_gate.receipt_document import finding_id
+    locator, label = ident.split("#")
+    path, line = locator.rsplit(":", 1)
+    return finding_id({"file": path, "line": int(line), "description": label,
+                       "residual_root": document_root(label)})
 
 
 @pytest.fixture

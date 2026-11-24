@@ -126,6 +126,7 @@ class DerivedReceipt:
     prior: str | None
     source: str | None
     adjudicated: str | None = None
+    harden_ids: frozenset[str] = frozenset()
 
 
 def derive_document(data):
@@ -171,6 +172,7 @@ def derive_document(data):
     source = document_digest(doc[sources[0]], sources[0]) if sources else None
     adjudicated = document_digest(doc["adjudicated_from"], "adjudicated_from") if len(sources) == 2 else None
     carried = []
+    harden_ids = set()
     if verdict in ("approved", "changes_requested"):
         _shape(model is not None and doc.get("severity_rubric") == "v2", "counted document")
         for key in ("findings", "hardened_carried"):
@@ -196,6 +198,8 @@ def derive_document(data):
                 if key == "findings":
                     own[cell] += 1
                 ident = finding_id(entry)
+                if listed_cell == "harden":
+                    harden_ids.add(ident)
                 if ident in listed:
                     refuse("receipt_finding_duplicate", ident)
                 listed.add(ident)
@@ -234,4 +238,4 @@ def derive_document(data):
         fields.update(findings=findings, open_bugs=doc["open_bugs"])
     else:
         _shape(doc.get("open_bugs") is None and not doc.get("findings"), "failed verdict counts")
-    return DerivedReceipt(doc, fields, tuple(carried), prior, source, adjudicated)
+    return DerivedReceipt(doc, fields, tuple(carried), prior, source, adjudicated, frozenset(harden_ids))

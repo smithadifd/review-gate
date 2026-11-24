@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 — Unreleased
+
+- Merge hardening derives every unresolved harden id from the verified receipt document, including a harden collapsed into a block on the same id. Its exact-source child follow-up remains required even with a standing block waiver. Event/document harden mismatches refuse `receipt_document_inconsistent`; missing, by-path, altered or underivable documents never fall back to event findings.
+
 ## 0.2.2 — 2026-11-23
 
 - **A carried finding whose prior receipt holds several entries on its root records and merges when they all reach one origin.** A runner can record two entries on one root at different lines in one round, for example a carried block and a carried harden of one earlier finding. The next round's carried entry on that root used to refuse `receipt_carried_root_missing` in the writer and at the merge port. Now the writer and the merge port's open-bug and hardening reads follow every entry on the root through its `carried_from` link, over the stored receipt events alone, and accept only when every branch ends at one origin finding id. At import, `prepare_receipt` follows the link one hop when the prior holds one entry on the root; the full walk runs at write and at the merge port. That id is the waiver id and the hardening source, and the history is every receipt the walk visited, newest first. Nothing is chosen by cell, line or description. Entries that reach different origins refuse `receipt_carried_root_missing` with the detail `<finding id>: root matches several entries that do not reach one origin`; no entry on the root, a link to no receipt, and a cycle refuse as before. (#10)

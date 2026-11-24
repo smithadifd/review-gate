@@ -1,6 +1,8 @@
 """Stage 11 and the stage order: write-ahead, the head-pinned merge call and the finished record."""
 from __future__ import annotations
 
+import pytest
+
 from review_gate.gate import STAGE_ORDER
 from review_gate.merge import merge_argv
 from review_gate.records import merge_key
@@ -14,6 +16,25 @@ def test_a_green_pull_request_merges_at_its_head(rig):
     assert result.out == f"merged {rig.repo.url} head={rig.repo.head} merge_commit={oid('merge')}\n"
     assert result.err == ""
     assert rig.merge_calls() == [merge_argv(rig.repo.url, rig.repo.head)]
+
+
+@pytest.mark.parametrize("carried_harden", [False, True])
+def test_block_and_harden_on_one_id_need_a_followup_at_merge(ledger_rig, carried_harden):
+    from review_gate.records import waiver_grant_id
+    r = ledger_rig
+    first, event = r.overlap_receipt(carried_harden=carried_harden)
+    origin = first.payload["findings"][0]["id"]
+    finding = event.payload["findings"][0]
+    assert finding["id"] != origin
+    assert event.payload["findings"] == [{"id": finding["id"], "cell": "block", "carried_from": first.id}]
+    r.grant(waiver_grant_id(r.subject.repo, r.subject.number, origin))
+    result = r.run()
+    assert result.reason == "hardening_missing", result.err
+    assert r.merge_calls() == []
+    r.followup(origin)
+    result = r.run()
+    assert result.code == 0, result.err
+    assert len(r.merge_calls()) == 1
 
 
 def test_the_merge_call_pins_the_argument_sha(rig):
