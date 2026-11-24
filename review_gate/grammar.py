@@ -221,3 +221,29 @@ def parse_record_args(argv):
         refuse("command_unknown", "expected record")
     if len(argv) != 1:
         refuse("argument_unknown", "usage: review-gate record (one document on standard input)")
+
+
+@dataclass(frozen=True)
+class ItemArgs:
+    pr: PullRequest
+    lookup: bool
+
+
+def parse_item_args(argv):
+    """Exactly item --pr URL [--lookup], with --lookup in either flag position.
+
+    Flags are case-sensitive, given once, without equals forms. Unknown,
+    repeated, missing or extra tokens refuse argument_unknown; a malformed
+    URL refuses pr_url_invalid. No reads precede this grammar.
+    """
+    argv = list(argv)
+    if not argv or argv[0] != "item":
+        refuse("command_unknown", "expected item")
+    lookup = "--lookup" in argv[1:]
+    flags = argv[1:]
+    if lookup:
+        flags = list(flags)
+        flags.remove("--lookup")
+    if len(flags) != 2 or flags[0] != "--pr":
+        refuse("argument_unknown", "usage: review-gate item --pr <URL> [--lookup]")
+    return ItemArgs(parse_pr_url(flags[1]), lookup)

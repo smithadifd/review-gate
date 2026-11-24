@@ -36,6 +36,7 @@ python3 -m review_gate merge ...
 review-gate recover <PR URL> <full head sha> --items ID[,ID...]
 review-gate import --store <absolute directory> --pr <PR URL>
 review-gate record < one-document.json
+review-gate item --pr <PR URL> [--lookup]
 ```
 
 - `<PR URL>` is `https://github.com/<owner>/<repo>/pull/<N>`, matched whole: no trailing slash, no
@@ -46,6 +47,35 @@ review-gate record < one-document.json
   main; it also needs the owner's grant `grant:remediation:<owner>/<repo>#<N>:<head>`.
 
 Anything outside this grammar refuses by name before any read.
+
+### Find or create the pull request's item
+
+Before the first review, run `review-gate item --pr <URL>`. It prints the one linking
+item's id and exits 0, without changing an existing item. If none links, it creates
+one ticket and its `pr` link atomically. The title is the canonical URL alone and
+the source is `pr:<canonical URL>`; canonicalization casefolds owner and repository.
+Stored full URLs and `owner/repo#N` links compare exactly as ledger's `pr_item` does.
+Repeated or concurrent calls return the same item without repeating either event.
+
+`--lookup` is read-only: one item prints its id and exits 0; none exits 3 with
+`pr_item_missing`. Either flag order is accepted (`--pr URL --lookup` or
+`--lookup --pr URL`); flags are exact, given once, without equals forms.
+Malformed argv refuses `argument_unknown`, malformed URLs `pr_url_invalid`.
+There is no JSON output convention; stdout is one item id followed by a newline.
+Other refusals exit 2 with `<name>: <detail>` on stderr and no stdout:
+`pr_item_ambiguous` for multiple linking items, `pr_item_link_conflict` for a
+competing link seen by the append precondition, `pr_item_source_conflict` for a
+conflicting source or derived id, `pr_item_loop_managed` when the loop owns the
+source item, and `pr_item_foreign_link` when that item already has a foreign PR link.
+Store and dependency admission use the same checks as receipt writing; unexpected
+errors report `item_failed: <Type>`.
+
+Creation and linking share one write transaction, including the append's cross-item
+precondition. A refusal or stop before commit rolls back both; after commit, a rerun
+returns the linked item. A previously created matching source without a link is
+completed on retry. Ledger and loop writers serialize on the database transaction.
+Raw `ledger link --rel pr` can still add a second linking item after this commits:
+store-level uniqueness remains follow-up `LEDGER-PR-LINK-UNIQUE1`.
 
 ## Output
 
@@ -115,9 +145,8 @@ Non-finite numbers (including exponent overflow), repeated keys and escaped unpa
 refuse before any write. If the database disappears after admission, the writer refuses rather
 than creating it.
 
-The item must already exist and link the pull request. With the ledger CLI, create it with
-`ledger new --type ticket --title <title> --source pr:<owner>/<repo>#<N>`, then
-`ledger link <item> --rel pr --target <URL>`. Neither writer nor importer creates or links items.
+The item must already exist and link the pull request. Resolve it before the first review
+with `review-gate item --pr <URL>`. Neither writer nor importer creates or links items.
 
 Import checks the admitted store's seven-column index, exact bytes, repository and number before
 writing. A document whose digest the item already records for the same lane, round and head is
@@ -140,14 +169,16 @@ rerun completes it without repeating events. No document supplies grants, waiver
 ```sh
 export LEDGER_DB=/absolute/path/to/ledger.db
 export PYTHONPATH=/absolute/path/to/ledger-hooks-plugin-root
+review-gate item --pr https://github.com/OWNER/REPO/pull/1
 review-gate record < sol-round-1.json
 review-gate record < claude-round-1.json
 ```
 
 Preconditions, none of which the verb supplies: `LEDGER_DB` is an absolute database file (unset
 refuses `records_unavailable`); the ledger plugin root is an absolute `PYTHONPATH` entry; and the
-pull request's item already exists and links the pull request, because the verb never creates or
-links items (`pr_item_missing` refuses).
+pull request's item already exists and links the pull request (resolve it with
+`review-gate item --pr <URL>`), because `record` never creates or links items
+(`pr_item_missing` refuses).
 
 The argv is exactly `record`: no flag and no operand, so `records`, `record x` and `record --flag`
 refuse (`command_unknown`, `argument_unknown`) before standard input is read. Standard input is
