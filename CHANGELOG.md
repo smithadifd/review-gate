@@ -1,8 +1,10 @@
 # Changelog
 
-## 0.3.1 — Unreleased
+## 0.3.1 — 2026-11-24
 
-- Document the required `ready_for_review` workflow trigger, with a copyable YAML example and the stage 8 refusal when no run starts after a draft is marked ready.
+- Document the required `ready_for_review` workflow trigger, with a copyable YAML example and the stage 8 refusal when no run starts after a draft is marked ready. (#16)
+
+Install with `@v0.3.1`.
 
 ## 0.3.0 — 2026-11-24
 
