@@ -105,6 +105,14 @@ They run in this order, and the first refusal stops the run.
 | 10 | recheck | the file list and the state read again, equal on every field; stages 3 to 7 and every grant asked again and equal; the default branch's tip is in the head and is the tip stage 9 judged |
 | 11 | merge | the write-ahead intent, then `gh pr merge <URL> --squash --match-head-commit <sha>`, then a read showing MERGED at that head, then the finished record, then the items closed |
 
+Stage 8 counts only runs created after the pull request was marked ready, so every workflow the merge needs must list `ready_for_review` in `on.pull_request.types`. A bare `pull_request:` uses GitHub's default types, which leave out `ready_for_review`, so flipping a draft to ready starts no run and stage 8 refuses `ci_no_runs`.
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+```
+
 The module docstrings carry each stage's full rules and refusal names.
 
 ## Record rules and recovery

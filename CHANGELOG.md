@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — Unreleased
+
+- Document the required `ready_for_review` workflow trigger, with a copyable YAML example and the stage 8 refusal when no run starts after a draft is marked ready.
+
 ## 0.3.0 — 2026-11-24
 
 - Document the receipt fields, copyable approving and single-nit JSON examples, and shape refusals at the record step. Exercise both README examples through the real record command and ledger writer. (#15)
