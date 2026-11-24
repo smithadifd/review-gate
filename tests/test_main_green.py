@@ -1,9 +1,12 @@
 """Stage 9: main is green at its tip, per selected workflow file, with --remediation an exact set and a grant."""
 from __future__ import annotations
 
+import json
+import pytest
+
 from review_gate.records import no_ci_grant_id, remediation_grant_id
 
-from rig import LINT_DOCS_YML, job, key, oid, ok, proof_jobs, run_doc
+from rig import LINT_DOCS_YML, fail, job, key, oid, ok, proof_jobs, run_doc
 
 CI = ".github/workflows/ci.yml"
 LINT = ".github/workflows/lint.yml"
@@ -105,6 +108,8 @@ def test_a_stale_newest_run_refuses(rig):
     result = rig.run()
     assert result.reason == "main_ci_run_stale", result.err
     assert rig.merge_calls() == []
+    stale_head = rig.repo.push_runs["ci.yml"][0]["head_sha"]
+    assert not any(f"/compare/{stale_head}..." in call for call in rig.endpoints())
 
 
 def test_the_newest_run_is_chosen_by_creation_time_not_list_order(rig):
@@ -333,11 +338,11 @@ def test_a_push_trigger_on_other_branches_only_refuses(rig):
 
 
 def test_a_path_filtered_push_workflow_whose_tip_started_no_run_refuses(rig):
-    filtered = "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\n    paths: ['src/**']\njobs: {}\n"
-    rig.repo.tip_workflows = {"ci.yml": filtered}
-    rig.repo.push_runs["ci.yml"] = [push_run(201, CI, oid("an older commit"))]
+    filtered_history(rig, [[{"filename": "src/app.py"}]])
     result = rig.run()
     assert result.reason == "main_workflow_path_filtered", result.err
+    assert rig.repo.tip in result.err
+    assert "src/app.py" in result.err
 
 
 def test_a_path_filtered_push_workflow_with_a_run_at_the_tip_passes(rig):
@@ -358,3 +363,203 @@ def test_an_unreadable_tip_refuses(rig):
     rig.repo.extra = {key(["api", "repos/octo/widget/git/ref/heads/main"]): [ok({"ref": "refs/heads/main"})]}
     result = rig.run()
     assert result.reason == "main_tip_unreadable", result.err
+
+
+def answer_history(rig, compare, commits):
+    head = rig.repo.push_runs["ci.yml"][0]["head_sha"]
+    endpoint = f"repos/{rig.repo.slug}/compare/{head}...{rig.repo.tip}"
+    rig.repo.extra[key(["api", endpoint])] = [ok(compare)]
+    for entry, commit in zip(compare["commits"], commits):
+        endpoint = f"repos/{rig.repo.slug}/commits/{entry['sha']}"
+        rig.repo.extra[key(["api", endpoint])] = [ok(commit)]
+
+
+def filtered_history(rig, changes, *, filter_key="paths", patterns=("src/**",)):
+    """An exact linear range, read through the fake gh at immutable commit endpoints."""
+
+    filtered = (
+        "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\n"
+        f"    {filter_key}: {json.dumps(patterns)}\njobs: {{}}\n"
+    )
+    rig.repo.tip_workflows = {"ci.yml": filtered}
+    head = oid("previous push")
+    rig.repo.push_runs["ci.yml"] = [push_run(201, CI, head)]
+    commits = []
+    parent = head
+    for index, files in enumerate(changes):
+        sha = rig.repo.tip if index == len(changes) - 1 else oid(f"later commit {index}")
+        commits.append({"sha": sha, "parents": [{"sha": parent}], "files": files})
+        parent = sha
+    compare = {
+        "status": "ahead", "ahead_by": len(commits), "behind_by": 0,
+        "commits": [{"sha": commit["sha"]} for commit in commits],
+    }
+    answer_history(rig, compare, commits)
+    return compare, commits
+
+
+def test_filtered_push_with_only_unmatched_later_paths_passes(rig):
+    filtered_history(rig, [[{"filename": "docs/guide.md"}]])
+    result = rig.run()
+    assert result.code == 0, result.err
+    assert any(f"/commits/{rig.repo.tip}" in call for call in rig.endpoints())
+
+
+def test_filtered_push_uses_the_tip_filter_not_the_run_head_filter(rig):
+    compare, _ = filtered_history(rig, [[{"filename": "src/new.py"}]])
+    old_doc = "name: CI\non:\n  pull_request:\n  push:\n    paths: ['legacy/**']\njobs: {}\n"
+    rig.repo.tree_routes(rig.repo.extra, rig.repo.push_runs["ci.yml"][0]["head_sha"], {"ci.yml": old_doc})
+    result = rig.run()
+    assert result.reason == "main_workflow_path_filtered", result.err
+    assert compare["commits"][0]["sha"] in result.err
+    assert "src/new.py" in result.err
+
+
+def test_filtered_push_checks_a_renames_previous_filename(rig):
+    filtered_history(rig, [[{"filename": "docs/app.py", "previous_filename": "src/app.py"}]])
+    result = rig.run()
+    assert result.reason == "main_workflow_path_filtered", result.err
+    assert rig.repo.tip in result.err
+    assert "src/app.py" in result.err
+
+
+@pytest.mark.parametrize("files,reason", [
+    ([{"filename": "docs/guide.md"}], None),
+    ([{"filename": "docs/guide.md"}, {"filename": "src/app.py"}], "main_workflow_path_filtered"),
+    ([{"filename": "docs/app.py", "previous_filename": "src/app.py"}], "main_workflow_path_filtered"),
+    ([{"filename": "docs"}], "main_workflow_path_filtered"),
+])
+def test_filtered_push_paths_ignore(rig, files, reason):
+    filtered_history(rig, [files], filter_key="paths-ignore", patterns=("docs/**",))
+    result = rig.run()
+    if reason is None:
+        assert result.code == 0, result.err
+    else:
+        assert result.reason == reason, result.err
+        assert rig.repo.tip in result.err
+
+
+@pytest.mark.parametrize("change", [
+    {"status": "diverged"}, {"status": "behind"}, {"status": "identical"},
+    {"behind_by": 1}, {"behind_by": False}, {"ahead_by": 2},
+    {"ahead_by": 0}, {"ahead_by": True}, {"commits": []},
+    {"commits": [{"sha": "bad"}]}, {"commits": [None]}, {"commits": None},
+])
+def test_filtered_push_unreadable_compare_refuses(rig, change):
+    compare, commits = filtered_history(rig, [[{"filename": "docs/guide.md"}]])
+    head = rig.repo.push_runs["ci.yml"][0]["head_sha"]
+    rig.repo.extra[key(["api", f"repos/{rig.repo.slug}/compare/{head}...{rig.repo.tip}"])] = [
+        ok({**compare, **change})
+    ]
+    result = rig.run()
+    assert result.reason == "main_filter_commits_unreadable", result.err
+    assert rig.merge_calls() == []
+
+
+def test_filtered_push_compare_cap_refuses(rig):
+    filtered_history(rig, [[] for _ in range(250)])
+    result = rig.run()
+    assert result.reason == "main_filter_commits_unreadable", result.err
+
+
+@pytest.mark.parametrize("change", [
+    {"parents": [{"sha": oid("previous push")}, {"sha": oid("two")}]},
+    {"parents": []}, {"parents": None}, {"parents": [None]},
+    {"parents": [{"sha": "bad"}]}, {"sha": oid("another commit")},
+    {"files": [{}]}, {"files": [None]}, {"files": None},
+    {"files": [{"filename": "../outside"}]},
+    {"files": [{"filename": "docs/a", "previous_filename": "/outside"}]},
+    {"files": [{"filename": "docs/a", "previous_filename": 7}]},
+    {"files": [{"filename": f"docs/{i}"} for i in range(300)]},
+])
+def test_filtered_push_unreadable_commit_refuses(rig, change):
+    compare, commits = filtered_history(rig, [[{"filename": "docs/guide.md"}]])
+    commits[0].update(change)
+    answer_history(rig, compare, commits)
+    result = rig.run()
+    assert result.reason == "main_filter_commits_unreadable", result.err
+
+
+@pytest.mark.parametrize("which", ["compare", "commit"])
+@pytest.mark.parametrize("answer", [fail(), ok("not JSON"), ok([])])
+def test_filtered_push_failed_or_malformed_reads_refuse(rig, which, answer):
+    filtered_history(rig, [[{"filename": "docs/guide.md"}]])
+    head = rig.repo.push_runs["ci.yml"][0]["head_sha"]
+    suffix = f"compare/{head}...{rig.repo.tip}" if which == "compare" else f"commits/{rig.repo.tip}"
+    rig.repo.extra[key(["api", f"repos/{rig.repo.slug}/{suffix}"])] = [answer]
+    result = rig.run()
+    assert result.reason == "main_filter_commits_unreadable", result.err
+
+
+@pytest.mark.parametrize("head", [None, "bad", 7])
+def test_filtered_push_malformed_run_head_refuses(rig, head):
+    filtered_history(rig, [[]])
+    rig.repo.push_runs["ci.yml"][0]["head_sha"] = head
+    result = rig.run()
+    assert result.reason == "main_filter_commits_unreadable", result.err
+
+
+def test_filtered_push_unreadable_pattern_refuses(rig):
+    filtered_history(rig, [[]], patterns=("!src/**",))
+    result = rig.run()
+    assert result.reason == "workflow_paths_unreadable", result.err
+
+
+@pytest.mark.parametrize("state,reason", [
+    ("pending", "main_ci_run_pending"), ("red", "main_ci_red"),
+    ("skipped", "main_tree_proof_missing"), ("unattributed", "main_ci_red_unattributed"),
+])
+def test_filtered_push_still_judges_the_run(rig, state, reason):
+    filtered_history(rig, [[{"filename": "docs/guide.md"}]])
+    if state == "pending":
+        rig.repo.push_runs["ci.yml"][0].update(status="in_progress", conclusion=None)
+    elif state == "red":
+        red_main(rig, "test")
+    elif state == "skipped":
+        rig.repo.jobs[201] = [job("test", "skipped")]
+    else:
+        rig.repo.push_runs["ci.yml"][0]["conclusion"] = "failure"
+    result = rig.run()
+    assert result.reason == reason, result.err
+
+
+def test_filtered_push_checks_the_middle_commit(rig):
+    compare, commits = filtered_history(rig, [
+        [{"filename": "docs/one.md"}], [{"filename": "src/app.py"}], [{"filename": "docs/two.md"}],
+    ])
+    result = rig.run()
+    assert result.reason == "main_workflow_path_filtered", result.err
+    assert commits[1]["sha"] in result.err
+    assert "src/app.py" in result.err
+
+
+def test_filtered_push_empty_commits_touch_nothing(rig):
+    filtered_history(rig, [[], [], []])
+    result = rig.run()
+    assert result.code == 0, result.err
+
+
+def test_filtered_push_does_not_replace_the_tip_used_by_stage_ten(rig):
+    filtered_history(rig, [[{"filename": "docs/guide.md"}]])
+    rig.repo.base_compare[0]["base_commit"]["sha"] = oid("tip moved")
+    result = rig.run()
+    assert result.reason == "main_moved_during_gate", result.err
+
+
+@pytest.mark.parametrize("case", ["wrong-parent", "missing-tip"])
+def test_filtered_push_requires_an_exact_chain_to_the_tip(rig, case):
+    compare, commits = filtered_history(rig, [[]])
+    if case == "wrong-parent":
+        commits[0]["parents"] = [{"sha": oid("unrelated parent")}]
+    else:
+        compare["commits"][0]["sha"] = oid("not the tip")
+        commits[0]["sha"] = compare["commits"][0]["sha"]
+    answer_history(rig, compare, commits)
+    result = rig.run()
+    assert result.reason == "main_filter_commits_unreadable", result.err
+
+
+def test_filtered_push_below_the_file_cap_passes(rig):
+    filtered_history(rig, [[{"filename": f"docs/{i}"} for i in range(299)]])
+    result = rig.run()
+    assert result.code == 0, result.err
