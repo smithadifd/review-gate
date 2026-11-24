@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "review-gate"
-version = "0.2.2"
+version = "0.3.0"
 description = "A head-pinned merge command that reads review records from the ledger and live GitHub state."
 readme = "README.md"
 requires-python = ">=3.11"
