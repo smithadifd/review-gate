@@ -109,12 +109,21 @@ The module docstrings carry each stage's full rules and refusal names.
 
 Two deciding receipts from distinct lanes are required. Only reserved `review.receipt` events
 count, bound to repository, pull request, head and files digest. Every inline receipt document
-is verified by the ledger, not parsed as authority. Only the highest round per lane decides;
-a replacing record anywhere in that deciding slot refuses `receipt_settlement_unsupported`.
+is verified by the ledger. The reserved event remains authority except that stage 6 derives
+the harden set from those verified bytes through the writer's derivation. Only the highest
+round per lane decides; a replacing record anywhere in that deciding slot refuses `receipt_settlement_unsupported`.
 Approved and changes-requested receipts count;
 an empty changes request refuses. Crashed and unparseable newest rounds never fall back.
-Block findings each need their own standing waiver, harden findings each need an exact-source
-child outside `--items`, and counted rounds past three need a standing grant or a current cite.
+Block findings each need their own standing waiver. Every document harden, including one
+collapsed into a block on the same id in the event, needs an exact-source child outside
+`--items`; a block waiver does not answer it. The source is `<item>:harden:<origin>`, with
+the origin resolved through the event entry's carried root. Event hardens must occur in
+the document's harden set; any other document harden must have a block event entry on its id,
+else `receipt_document_inconsistent` names the receipt event. Missing, by-path or altered
+documents refuse `receipt_doc_missing`, `receipt_doc_not_inline` or `receipt_doc_altered`;
+verified documents that cannot derive retain the derivation's refusal name. Stage 6's token
+retains the document harden ids for the pre-merge recheck. Counted rounds past three need
+a standing grant or a current cite.
 
 The database's adjacent `config.json` may set `"review_second_family": "anthropic"` (also
 `openai` or `google`). It can only add a family requirement. A malformed, unreadable or symlinked

@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from rig import ITEM, oid
+from ledger_rig import document_id
 from review_gate.records import merge_key, waiver_grant_id, exception_grant_id, review_round_grant_id
 from review_gate.refusal import Refusal
 
@@ -24,7 +25,8 @@ def refused(name, call, *args):
 
 def test_real_merge_records_intent_done_then_closes(ledger_rig):
     r = ledger_rig
-    r.pair()
+    r.documented_receipt()
+    r.documented_receipt("claude")
     result = r.run()
     assert result.code == 0, result.err
     from ledger import open_ledger
@@ -160,15 +162,15 @@ def test_each_block_needs_its_own_waiver(ledger_rig):
 @pytest.mark.parametrize("cell", ["block", "harden"])
 def test_carried_root_is_exact(ledger_rig, cell):
     r = ledger_rig
-    first = r.receipt(findings=[{"id": "f.py:1#prefix-root", "cell": cell}])
-    r.receipt(round_=2, prior_receipt=first.id,
-              findings=[{"id": "g.py:1#root", "cell": cell, "carried_from": first.id}])
-    r.receipt("claude")
+    first = r.documented_receipt(findings=[{"id": "f.py:1#prefix-root", "cell": cell}])
+    r.documented_receipt(round_=2, prior_receipt=first.id,
+                         findings=[{"id": "g.py:1#root", "cell": cell, "carried_from": first.id}])
+    r.documented_receipt("claude")
     if cell == "block":
-        r.grant(waiver_grant_id(r.subject.repo, 7, "f.py:1#prefix-root"))
+        r.grant(waiver_grant_id(r.subject.repo, 7, document_id("f.py:1#prefix-root")))
     else:
         r.append("item.created", {"type": "ticket", "title": "Follow-up",
-                 "source": f"{ITEM}:harden:f.py:1#prefix-root"}, item="it-followup")
+                 "source": f"{ITEM}:harden:{document_id('f.py:1#prefix-root')}"}, item="it-followup")
         r.append("item.linked", {"rel": "child-of", "target": ITEM}, item="it-followup")
     refused("receipt_carried_root_missing", getattr(r.port, "open_bugs" if cell == "block" else "hardening"), r.subject, ITEM)
 
@@ -176,11 +178,11 @@ def test_carried_root_is_exact(ledger_rig, cell):
 def root_walk(r, cell):
     """The merge port's answer for the newest sol round: (finding id, history event ids) per entry."""
     if cell == "block":
-        r.grant(waiver_grant_id(r.subject.repo, 7, "f.py:1#root"))
+        r.grant(waiver_grant_id(r.subject.repo, 7, document_id("f.py:1#root")))
         answer = r.port.open_bugs(r.subject, ITEM)[1]
     else:
         r.append("item.created", {"type": "ticket", "title": "Follow-up",
-                 "source": f"{ITEM}:harden:f.py:1#root"}, item="it-followup")
+                 "source": f"{ITEM}:harden:{document_id('f.py:1#root')}"}, item="it-followup")
         r.append("item.linked", {"rel": "child-of", "target": ITEM}, item="it-followup")
         answer = r.port.hardening(r.subject, ITEM)[1]
     return [(finding, [h[0] for h in history]) for finding, history, _ in answer]
@@ -196,46 +198,46 @@ def refused_with(detail, call, *args):
 def test_entries_on_one_root_that_reach_one_origin_merge(ledger_rig, cell):
     """Appended by the ledger's own writer, so only the merge port walks them."""
     r = ledger_rig
-    first = r.receipt(findings=[{"id": "f.py:1#root", "cell": cell}])
-    second = r.receipt(round_=2, prior_receipt=first.id, findings=[
+    first = r.documented_receipt(findings=[{"id": "f.py:1#root", "cell": cell}])
+    second = r.documented_receipt(round_=2, prior_receipt=first.id, findings=[
         {"id": "f.py:2#root", "cell": "harden", "carried_from": first.id},
         {"id": "f.py:3#root", "cell": "nit", "carried_from": first.id}])
-    r.receipt(round_=3, prior_receipt=second.id,
-              findings=[{"id": "f.py:4#root", "cell": cell, "carried_from": second.id}])
-    r.receipt("claude")
-    assert root_walk(r, cell) == [("f.py:1#root", [second.id, first.id])]
+    r.documented_receipt(round_=3, prior_receipt=second.id,
+                         findings=[{"id": "f.py:4#root", "cell": cell, "carried_from": second.id}])
+    r.documented_receipt("claude")
+    assert root_walk(r, cell) == [(document_id("f.py:1#root"), [second.id, first.id])]
 
 
 @pytest.mark.parametrize("cell", ["block", "harden"])
 def test_entries_on_one_root_with_two_origins_refuse_at_the_merge_port(ledger_rig, cell):
     r = ledger_rig
-    first = r.receipt(findings=[{"id": "f.py:1#root", "cell": cell}, {"id": "f.py:2#root", "cell": "nit"}])
-    r.receipt(round_=2, prior_receipt=first.id,
-              findings=[{"id": "f.py:3#root", "cell": cell, "carried_from": first.id}])
-    r.receipt("claude")
-    refused_with("f.py:3#root: root matches several entries that do not reach one origin",
+    first = r.documented_receipt(findings=[{"id": "f.py:1#root", "cell": cell}, {"id": "f.py:2#root", "cell": "nit"}])
+    r.documented_receipt(round_=2, prior_receipt=first.id,
+                         findings=[{"id": "f.py:3#root", "cell": cell, "carried_from": first.id}])
+    r.documented_receipt("claude")
+    refused_with(f"{document_id('f.py:3#root')}: root matches several entries that do not reach one origin",
                  root_walk, r, cell)
 
 
 @pytest.mark.parametrize("cell", ["block", "harden"])
 def test_a_branch_to_an_event_without_the_root_refuses(ledger_rig, cell):
     r = ledger_rig
-    other = r.receipt("other", findings=[{"id": "h.py:1#other", "cell": "nit"}])
-    first = r.receipt(findings=[{"id": "f.py:1#root", "cell": cell}])
-    second = r.receipt(round_=2, prior_receipt=first.id, findings=[
+    other = r.documented_receipt("other", findings=[{"id": "h.py:1#other", "cell": "nit"}])
+    first = r.documented_receipt(findings=[{"id": "f.py:1#root", "cell": cell}])
+    second = r.documented_receipt(round_=2, prior_receipt=first.id, findings=[
         {"id": "f.py:2#root", "cell": "nit", "carried_from": first.id},
         {"id": "f.py:3#root", "cell": "nit", "carried_from": other.id}])
-    r.receipt(round_=3, prior_receipt=second.id,
-              findings=[{"id": "f.py:4#root", "cell": cell, "carried_from": second.id}])
-    r.receipt("claude")
-    refused_with("f.py:3#root", root_walk, r, cell)
+    r.documented_receipt(round_=3, prior_receipt=second.id,
+                         findings=[{"id": "f.py:4#root", "cell": cell, "carried_from": second.id}])
+    r.documented_receipt("claude")
+    refused_with(document_id("f.py:3#root"), root_walk, r, cell)
 
 
 def test_hardening_needs_exact_current_child_not_closing_item(ledger_rig):
     r = ledger_rig
-    r.receipt(findings=[{"id": "f.py:1#x", "cell": "harden"}])
-    r.receipt("claude")
-    source = f"{ITEM}:harden:f.py:1#x"
+    r.documented_receipt(findings=[{"id": "f.py:1#x", "cell": "harden"}])
+    r.documented_receipt("claude")
+    source = f"{ITEM}:harden:{document_id('f.py:1#x')}"
     r.append("item.created", {"type": "ticket", "title": "Follow-up", "source": source}, item="it-followup")
     r.append("item.linked", {"rel": "child-of", "target": ITEM}, item="it-followup")
     assert r.port.hardening(r.subject, ITEM)
@@ -298,7 +300,8 @@ def test_recovery_without_intent_refuses(ledger_rig):
 
 def test_intent_is_visible_to_merge_process_before_call(ledger_rig):
     r = ledger_rig
-    r.pair()
+    r.documented_receipt()
+    r.documented_receipt("claude")
     proof = r.db.parent / "process-proof.json"
     code = (
         "import sqlite3\n"
@@ -317,9 +320,9 @@ def test_intent_is_visible_to_merge_process_before_call(ledger_rig):
 
 def test_grant_withdrawal_between_passes_is_live(ledger_rig):
     r = ledger_rig
-    r.receipt(findings=[{"id": "f.py:1#x", "cell": "block"}])
-    r.receipt("claude")
-    grant_id = waiver_grant_id(r.subject.repo, 7, "f.py:1#x")
+    r.documented_receipt(findings=[{"id": "f.py:1#x", "cell": "block"}])
+    r.documented_receipt("claude")
+    grant_id = waiver_grant_id(r.subject.repo, 7, document_id("f.py:1#x"))
     r.grant(grant_id)
     transport = r.fake.transport()
 
@@ -338,7 +341,8 @@ def test_grant_withdrawal_between_passes_is_live(ledger_rig):
 
 def test_superseding_evidence_changes_recheck_token(ledger_rig):
     r = ledger_rig
-    first, _ = r.pair()
+    first = r.documented_receipt()
+    r.documented_receipt("claude")
     before = r.port.receipts(r.subject, ITEM)
     transport = r.fake.transport()
     changed = False
@@ -348,7 +352,7 @@ def test_superseding_evidence_changes_recheck_token(ledger_rig):
             nonlocal changed
             if not changed and argv[:2] == ["api", f"repos/{r.repo.slug}/git/ref/heads/main"]:
                 changed = True
-                r.receipt(round_=2, prior_receipt=first.id)
+                r.documented_receipt(round_=2, prior_receipt=first.id)
             return transport.run(argv)
 
     result = r.run(gh=ChangingGh())
@@ -392,8 +396,9 @@ def test_unknown_payload_version_refuses(ledger_rig):
     refused("receipt_version_unsupported", r.port.receipts, r.subject, ITEM)
 
 
+@pytest.mark.parametrize("stage", ["receipts", "hardening"])
 @pytest.mark.parametrize("damage", ["bytes", "path", "missing"])
-def test_receipt_document_is_verified_inline(ledger_rig, damage):
+def test_receipt_document_is_verified_inline(ledger_rig, damage, stage):
     from ledger import open_ledger
     r = ledger_rig
     first, _ = r.pair()
@@ -414,7 +419,59 @@ def test_receipt_document_is_verified_inline(ledger_rig, damage):
         payload["role"] = "other"
         name = "receipt_doc_missing"
     corrupt_event(r, document.id, payload=payload)
-    refused(name, r.port.receipts, r.subject, ITEM)
+    refused(name, getattr(r.port, stage), r.subject, ITEM)
+
+
+@pytest.mark.parametrize("mismatch", ["event_only", "document_only", "event_nit"])
+def test_hardening_binds_event_cells_to_document_ids(ledger_rig, mismatch):
+    from test_receipt_runner_documents import cells, entry
+    r = ledger_rig
+    if mismatch == "event_only":
+        event = r.writer_receipt()
+        payload = dict(event.payload, findings=[{"id": "f.py:1#other", "cell": "harden"}])
+        r.followup("f.py:1#other")
+    else:
+        event = r.writer_receipt(findings=[entry("Harden this", "harden")], cells=cells(harden=1))
+        ident = event.payload["findings"][0]["id"]
+        payload = dict(event.payload, findings=[] if mismatch == "document_only" else
+                       [{"id": ident, "cell": "nit"}])
+        r.followup(ident)
+    r.writer_receipt(lane="claude", served_model="claude-opus-x")
+    corrupt_event(r, event.id, payload=payload)
+    with pytest.raises(Refusal) as exc:
+        r.port.hardening(r.subject, ITEM)
+    assert (exc.value.name, exc.value.detail) == ("receipt_document_inconsistent", str(event.id)), exc.value.line()
+
+
+def test_resolved_carried_harden_does_not_need_a_followup(ledger_rig):
+    from test_receipt_runner_documents import entry, first_round, root, second_round
+    from test_receipt_writer import write
+    r = ledger_rig
+    harden = entry("Resolved harden", "harden")
+    first = first_round(r, [harden])
+    write(r, second_round(r, first, hardened_carried=[
+        dict(harden, residual_root=root("f.py", 1, "Resolved harden"))],
+        resolved_carried=[dict(harden)]))
+    r.writer_receipt(lane="claude", served_model="claude-opus-x")
+    token = r.port.hardening(r.subject, ITEM)
+    assert token[1] == (), "resolved carried harden must not require a follow-up"
+    assert all(ids == () for _, ids in token[2])
+
+
+def test_verified_document_that_cannot_derive_refuses_at_hardening(ledger_rig):
+    r = ledger_rig
+    r.pair()
+    refused("receipt_repository_missing", r.port.hardening, r.subject, ITEM)
+
+
+def test_hardening_token_retains_document_ids_under_a_block(ledger_rig):
+    r = ledger_rig
+    first, event = r.overlap_receipt()
+    origin = first.payload["findings"][0]["id"]
+    r.followup(origin)
+    token = r.port.hardening(r.subject, ITEM)
+    assert (event.id, (event.payload["findings"][0]["id"],)) in token[2]
+    assert token[1][0][0] == origin
 
 
 def test_informal_review_and_document_are_not_receipts(ledger_rig):
@@ -517,7 +574,8 @@ def test_database_in_git_tree_is_rejected_before_open(ledger_rig):
 @pytest.mark.parametrize("body", ["", "Waiver: f.py:1 — grant\nReview round grant: r9 — grant\nHardening: f.py:1 — ticket"])
 def test_body_authority_lines_do_not_change_decision(ledger_rig, body):
     r = ledger_rig
-    r.pair()
+    r.documented_receipt()
+    r.documented_receipt("claude")
     r.repo.pull_record["body"] = body
     result = r.run()
     assert result.code == 0, result.err

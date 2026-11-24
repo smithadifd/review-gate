@@ -1,6 +1,7 @@
 """The records port for the accepted ledger versions (ledger_runtime.SUPPORTED_VERSIONS). Each call opens a fresh connection; no gate snapshot.
 
-Receipt authority is the reserved event, not JSON in its verified document.
+Receipt authority is the reserved event, except merge harden ids come from its
+verified document through the writer's derivation.
 Settlement-bearing events are unsupported until document-derived settlement
 validation exists. Stage tokens retain event identities and grant elections.
 """
@@ -120,7 +121,7 @@ class LedgerRecords:
             refuse("second_family_config_invalid", "review_second_family must name a known model family")
         return required
 
-    def _events(self, lg, subject, item, *, current=True):
+    def _events(self, lg, subject, item, *, current=True, verified_documents=None):
         result = []
         doc = ledger_module("verbs.doc")
         documents = None
@@ -153,9 +154,11 @@ class LedgerRecords:
             if "path" in document.payload:
                 refuse("receipt_doc_not_inline", str(event.id))
             try:
-                doc.verified_content(document, self.root)
+                content = doc.verified_content(document, self.root)
             except ledger_module("verbs").CliError:
                 refuse("receipt_doc_altered", str(event.id))
+            if verified_documents is not None:
+                verified_documents[event.id] = content
             if current and p["changed_files_sha256"] != subject.files_sha256:
                 refuse("receipt_files_mismatch", str(event.id))
             derived = family(p.get("served_model"))
@@ -166,8 +169,8 @@ class LedgerRecords:
             result.append(event)
         return result
 
-    def _deciding(self, lg, subject, item):
-        events = self._events(lg, subject, item)
+    def _deciding(self, lg, subject, item, *, verified_documents=None):
+        events = self._events(lg, subject, item, verified_documents=verified_documents)
         if not events:
             refuse("receipts_missing", subject.url)
         newest = {}
@@ -226,12 +229,22 @@ class LedgerRecords:
             return (tuple(_identity(e) for e in counted), tuple(proofs))
 
     def hardening(self, subject, item):
+        # Local import: document derivation also uses this module's model family rule.
+        from .receipt_document import derive_document
         with self._open() as lg:
-            counted = self._deciding(lg, subject, item)
+            verified_documents = {}
+            counted = self._deciding(lg, subject, item, verified_documents=verified_documents)
             evidence = []
+            document_ids = []
             for event in counted:
+                harden_ids = derive_document(verified_documents[event.id]).harden_ids
+                event_hardens = {f["id"] for f in event.payload["findings"] if f["cell"] == "harden"}
+                event_blocks = {f["id"] for f in event.payload["findings"] if f["cell"] == "block"}
+                if not event_hardens <= harden_ids <= event_hardens | event_blocks:
+                    refuse("receipt_document_inconsistent", str(event.id))
+                document_ids.append((event.id, tuple(sorted(harden_ids))))
                 for finding in event.payload["findings"]:
-                    if finding["cell"] != "harden":
+                    if finding["id"] not in harden_ids:
                         continue
                     finding_id, history = self._root_finding(lg, subject, item, event, finding)
                     source = f"{item}:harden:{finding_id}"
@@ -246,7 +259,7 @@ class LedgerRecords:
                     if not matches:
                         refuse("hardening_missing", finding_id)
                     evidence.append((finding_id, history, tuple(matches)))
-            return (tuple(_identity(e) for e in counted), tuple(evidence))
+            return (tuple(_identity(e) for e in counted), tuple(evidence), tuple(document_ids))
 
     def round_cap(self, subject, item):
         with self._open() as lg:
