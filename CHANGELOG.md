@@ -1,14 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-24
 
-- Document the receipt fields, copyable approving and single-nit JSON examples, and shape refusals at the record step. Exercise both README examples through the real record command and ledger writer.
+- Document the receipt fields, copyable approving and single-nit JSON examples, and shape refusals at the record step. Exercise both README examples through the real record command and ledger writer. (#15)
+- Add `review-gate item --pr <URL> [--lookup]`: find the existing pull request item or atomically create one deterministic ticket and PR link. Retries and concurrent calls do not duplicate events. Lookup is read-only and exits 3 with `pr_item_missing` when absent; ambiguity, source conflicts and competing links refuse without writes. (#12)
+- Replace manual item creation/linking guidance with the item verb. Raw ledger PR linking still has no cross-item uniqueness guarantee. (#12)
+- Merge hardening derives every unresolved harden id from the verified receipt document, including a harden collapsed into a block on the same id. Its exact-source child follow-up remains required even with a standing block waiver. Event/document harden mismatches refuse `receipt_document_inconsistent`; missing, by-path, altered or underivable documents never fall back to event findings. (#13)
 
-## 0.2.3 — Unreleased
-
-- Add `review-gate item --pr <URL> [--lookup]`: find the existing pull request item or atomically create one deterministic ticket and PR link. Retries and concurrent calls do not duplicate events. Lookup is read-only and exits 3 with `pr_item_missing` when absent; ambiguity, source conflicts and competing links refuse without writes.
-- Replace manual item creation/linking guidance with the item verb. Raw ledger PR linking still has no cross-item uniqueness guarantee.
-- Merge hardening derives every unresolved harden id from the verified receipt document, including a harden collapsed into a block on the same id. Its exact-source child follow-up remains required even with a standing block waiver. Event/document harden mismatches refuse `receipt_document_inconsistent`; missing, by-path, altered or underivable documents never fall back to event findings.
+Install with `@v0.3.0`.
 
 ## 0.2.2 — 2026-11-23
 
