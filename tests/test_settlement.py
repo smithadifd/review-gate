@@ -157,6 +157,15 @@ def test_settle_forms(cell, evidence, kind, located):
     assert (source, final, earlier) == before
 
 
+@pytest.mark.parametrize("cell,evidence,kind", [
+    ("block", "probed", "quote"),
+    ("harden", "read", "lane-probe"),
+])
+def test_settle_form_must_match_evidence(cell, evidence, kind):
+    source, final, earlier = context(cell, evidence, kind)
+    refuses([source, final], "form", earlier=earlier)
+
+
 def test_changes_requested_settlement_keeps_own_findings():
     source, _, earlier = context()
     source.update(verdict="changes_requested", findings=[dict(finding(), line=8)],
@@ -210,6 +219,23 @@ def test_path_metadata_is_neither_compared_nor_opened():
     assert run([source, final], earlier)[0].id == 2
 
 
+@pytest.mark.parametrize("location", ["findings", "fixed_by_delta"])
+@pytest.mark.parametrize("key", ["output_path", "detail"])
+def test_nested_metadata_comparison(location, key):
+    source, _, earlier = context()
+    if location == "findings":
+        source["findings"] = [dict(finding("harden"), output_path="before", detail="before")]
+        source["cells"]["harden"] = 1
+    else:
+        source["blocks_carried"][0].update(output_path="before", detail="before")
+    final = settled(source)
+    final[location][0][key] = "after"
+    if key == "output_path":
+        assert run([source, final], earlier)[0].id == 2
+    else:
+        refuses([source, final], "copied" if location == "findings" else "partition", earlier=earlier)
+
+
 @pytest.mark.parametrize("field,value", [
     ("adjudicated_by", ""), ("adjudication_reason", None),
     ("verdict", "changes_requested"),
@@ -248,6 +274,114 @@ def test_adjudication_another_model():
 def test_unknown_adjudication_family():
     source = plain(verdict="unparseable", open_bugs=None, served_model="unknown")
     refuses([source, adjudicate(source)], "copied", "receipt_adjudication_invalid")
+
+
+@pytest.mark.parametrize("key,cell", [("blocks_carried", "block"), ("hardened_carried", "harden")])
+@pytest.mark.parametrize("keep", [False, True])
+def test_adjudication_preserves_source_carried(key, cell, keep):
+    source = plain(verdict="unparseable", open_bugs=None, **{key: [finding(cell)]})
+    final = adjudicate(source)
+    if not keep:
+        final[key] = []
+    final["cells"]["block"] = final["open_bugs"] = len(final["blocks_carried"])
+    if keep:
+        assert run([source, final])[0].id == 2
+    else:
+        refuses([source, final], "carried", "receipt_adjudication_invalid")
+
+
+@pytest.mark.parametrize("cell", ["block", "harden"])
+@pytest.mark.parametrize("keep", [False, True])
+def test_adjudication_preserves_previous_round_open_findings(cell, keep):
+    entry = finding(cell)
+    previous = plain(round=1, findings=[entry])
+    source = plain(verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[])
+    if keep:
+        final["blocks_carried" if cell == "block" else "hardened_carried"] = [deepcopy(entry)]
+    final["cells"]["block"] = final["open_bugs"] = len(final["blocks_carried"])
+    if keep:
+        assert run([source, final], [previous])[0].id == 2
+    else:
+        refuses([source, final], "carried", "receipt_adjudication_invalid", [previous])
+
+
+def test_adjudication_uses_previous_round_deciding_document():
+    source = plain(round=3, verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[])
+    older = plain(round=2, findings=[finding()])
+    deciding = plain(round=2)
+    other_lane = plain(round=2, lane="lane-b", findings=[finding()])
+    other_round = plain(round=1, findings=[finding()])
+    assert run([source, final], [older, deciding, other_lane, other_round])[0].id == 2
+
+
+def test_adjudication_previous_round_excludes_resolved_hardens():
+    entry = finding("harden")
+    previous = plain(hardened_carried=[entry], resolved_carried=[deepcopy(entry)])
+    source = plain(round=3, verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[])
+    assert run([source, final], [previous])[0].id == 2
+
+
+def test_adjudication_missing_previous_round_refuses():
+    source = plain(verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[])
+    refuses([source, final], "carried", "receipt_adjudication_invalid")
+
+
+@pytest.mark.parametrize("cell,key", [("block", "blocks_carried"), ("harden", "hardened_carried")])
+def test_adjudication_preserves_previous_round_carried_findings(cell, key):
+    previous = plain(**{key: [finding(cell)]})
+    source = plain(round=3, verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[])
+    refuses([source, final], "carried", "receipt_adjudication_invalid", [previous])
+
+
+@pytest.mark.parametrize("round_number", [1, 2])
+def test_adjudication_without_fallback_when_not_required(round_number):
+    source = plain(round=round_number, verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"]
+    if round_number == 1:
+        del source["hardened_carried"], source["prior_receipt"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[])
+    assert run([source, final])[0].id == 2
+
+
+@pytest.mark.parametrize("unlocated", [False, True])
+def test_adjudication_carried_uses_canonical_finding_ids(unlocated):
+    entry = finding()
+    if unlocated:
+        entry.update(file=None, line=None)
+    else:
+        entry["residual_root"] = ident(entry)
+    source = plain(verdict="unparseable", open_bugs=None, blocks_carried=[entry])
+    final = adjudicate(source)
+    final["blocks_carried"][0]["detail"] = "Additional context, not a different finding."
+    if not unlocated:
+        final["blocks_carried"][0]["description"] = "Reworded with the same canonical root."
+    final["cells"]["block"] = final["open_bugs"] = 1
+    assert run([source, final])[0].id == 2
+
+
+def test_adjudication_previous_round_ignores_nits():
+    previous = plain(round=1, findings=[finding("nit")])
+    source = plain(verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[])
+    assert run([source, final], [previous])[0].id == 2
 
 
 @pytest.mark.parametrize("which", ["settled_from", "adjudicated_from"])
@@ -312,6 +446,21 @@ def test_event_chain_binding(fault):
     with pytest.raises(Refusal) as error:
         check_slot(events, documents, earlier)
     assert error.value.name == "receipt_sibling_chain_invalid"
+
+
+def test_first_plain_event_cannot_supersede():
+    event = SimpleNamespace(id=5, payload={"supersedes": 4})
+    with pytest.raises(Refusal, match="receipt_sibling_chain_invalid: 5 grammar"):
+        check_slot([event], {5: plain()})
+
+
+def test_repeated_event_id_refuses_grammar():
+    source, final, earlier = context()
+    events = [SimpleNamespace(id=1, payload={"doc_sha256": digest(source)}),
+              SimpleNamespace(id=2, payload={"doc_sha256": digest(final), "supersedes": 1}),
+              SimpleNamespace(id=2, payload={"doc_sha256": digest(final), "supersedes": 2})]
+    with pytest.raises(Refusal, match="receipt_sibling_chain_invalid: 2 grammar"):
+        check_slot(events, {1: source, 2: final}, earlier)
 
 
 @pytest.mark.parametrize("field,value,why", [
@@ -474,6 +623,7 @@ def test_absolute_probe_selector_is_not_opened():
     ("extra", 1), ("prompt_sha256", "bad"), ("region.file", "other.py"),
     ("region.first", True), ("region.last", 0), ("region.sha256", "bad"),
     ("quote", "short"), ("answer", "Settle: fixed - Wrong punctuation"),
+    ("answer", "Settle: fixed — A different explanation without the quoted text."),
     ("requested_model", ""), ("served_model", OTHER), ("served_model", "unknown"),
 ])
 def test_quote_shape(path, value):
@@ -592,3 +742,22 @@ def test_block_first_turn_must_be_raising_family():
     record["served_model"] = OTHER
     record["second"]["served_model"] = MODEL
     refuses([source, final], "lane_probe", earlier=earlier)
+
+
+@pytest.mark.parametrize("verdict", ["unparseable", "crashed"])
+def test_null_findings_refuses_by_name(verdict):
+    refuses([plain(verdict=verdict, findings=None, open_bugs=None)], "entries")
+
+
+def test_plain_round_after_settlement_has_no_inherited_settle_record():
+    source, final, earlier = context("harden")
+    assert run([source, final], earlier)[0].id == 2
+    next_round = plain(round=3, prior_receipt={"sha256": digest(final)})
+    assert run([next_round], [source, final])[0].id == 1
+
+
+def test_plain_resolved_settle_record_is_unbound():
+    entry = finding("harden")
+    doc = plain(hardened_carried=[entry],
+                resolved_carried=[dict(entry, settle=settle_record(entry))])
+    refuses([doc], "unbound")
