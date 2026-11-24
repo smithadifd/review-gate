@@ -10,7 +10,7 @@ review-gate is a Python command, not a Claude plugin, so it has no marketplace e
 pinned release with pip:
 
 ```sh
-python3 -m pip install 'review-gate @ git+https://github.com/smithadifd/review-gate.git@v0.3.0'
+python3 -m pip install 'review-gate @ git+https://github.com/smithadifd/review-gate.git@v0.3.1'
 ```
 
 It reads the ledger through the ledger-hooks plugin that the public harness default installs; put
