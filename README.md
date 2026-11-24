@@ -125,6 +125,14 @@ and each single-parent commit must list fewer than 300 files. Unfiltered workflo
 require a run on the tip (`main_ci_run_stale` otherwise). All checks on the newest run still
 apply; stage 10 still compares the default branch's tip, not the older run's head.
 
+If the push filter does not list the workflow's own file and a commit changes only that file,
+GitHub starts no run and main's newest run stays on an older commit. Stage 9 refuses
+`main_workflow_path_filtered` when a later commit's `filename` or `previous_filename` is the
+workflow's own path, whatever the filter says: it is the definition being judged. Nothing in
+the gate clears this state; `--remediation` does not apply because it needs red jobs.
+Prevent it by listing the workflow's own path in its push filter. Clear it with a push to
+the default branch, outside the gate, that touches an admitted path.
+
 ## Record rules and recovery
 
 Two deciding receipts from distinct lanes are required. Only reserved `review.receipt` events
@@ -384,7 +392,10 @@ record in a deciding slot refuses rather than dropping findings on a sibling's w
   that the head or the run the marker names is the one the proof was made for.
 - The push path-filter check does not replay GitHub's own filter evaluation (push diffs and its
   file cap); it bounds that evaluation with the stricter per-commit check against the tip's filter.
-  A later commit changing only a file the workflow uses but its filter does not list (a reusable workflow or a local action) leaves the older run standing as main's status, as GitHub would not run the workflow for that push either.
+  A later commit changing only a reusable workflow or local action that the filter does not list
+  leaves the older run standing as main's status, as GitHub would not run the workflow for that
+  push either. This is an accepted residual; the workflow's own file instead refuses because it
+  is the definition being judged.
 - A grant withdrawn or a new receipt written after the final recheck and before the merge is not seen.
 - A second item linking the pull request after intent makes later writes refuse `pr_item_ambiguous`;
   links cannot be removed through this command.

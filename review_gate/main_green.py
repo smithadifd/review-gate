@@ -20,8 +20,10 @@ path order:
   path-filtered push workflow: its newest run may be on an ancestor when
   every later commit through T touches no path admitted by the push filter
   at T. A touching commit refuses ``main_workflow_path_filtered``, naming
-  its sha and path. An unreadable or capped compare or commit read, doubtful
-  ancestry, or a merge commit refuses ``main_filter_commits_unreadable``.
+  its sha and path. A later commit whose ``filename`` or ``previous_filename``
+  is the workflow's own path also refuses ``main_workflow_path_filtered``,
+  whatever the filter says. An unreadable or capped compare or commit read,
+  doubtful ancestry, or a merge commit refuses ``main_filter_commits_unreadable``.
   An unfiltered workflow's run behind T still refuses ``main_ci_run_stale``.
 - The run must be completed (``main_ci_run_pending``). Its jobs are read
   through every page (``main_ci_jobs_unreadable``). A skipped job passes only
