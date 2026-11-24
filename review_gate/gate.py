@@ -147,6 +147,25 @@ def stage_recheck(gate: Gate) -> None:
         )
 
 
+def _ci_selection(gate: Gate) -> None:
+    """Require exactly one of the two selections stage 9 knows how to read."""
+    expected, grant = gate.expected, gate.no_ci_grant
+    problem = None
+    if not isinstance(expected, dict):
+        problem = "malformed expected: require a dict"
+    elif grant is not None and not isinstance(grant, GrantProof):
+        problem = "malformed no_ci_grant: require a GrantProof or None"
+    elif grant is not None and expected:
+        problem = "both: expected workflows and no_ci_grant are set"
+    elif grant is None and not expected:
+        problem = "none: require expected workflows or no_ci_grant"
+    elif any(not isinstance(key, str) or not key or not isinstance(value, str) or not value
+             for key, value in expected.items()):
+        problem = "malformed expected: workflow keys and values must be non-empty str"
+    if problem is not None:
+        refuse("ci_stage_selection_invalid", problem)
+
+
 # The stage order, fixed: (name, function). Stage 0 runs before this list.
 STAGES = (
     ("store", stage_store),
@@ -161,8 +180,13 @@ STAGES = (
 STAGE_ORDER = ("arguments",) + tuple(name for name, _ in STAGES)
 
 
-def run(argv, *, records, gh, store_check, out, err) -> int:
-    """Run ``review-gate`` with ``argv`` (program name excluded); return the exit code."""
+def run(argv, *, records, gh, store_check, out, err, ci_stage=stage_ci) -> int:
+    """Run ``argv`` without the program name; only library callers may replace stage 8.
+
+    ``ci_stage(gate)`` must leave a non-empty workflow-path/name dict and no grant,
+    or a ``GrantProof`` in ``no_ci_grant`` and an empty ``expected`` dict.
+    The sequencer checks that shape before stage 9; return the command's exit code.
+    """
     gate = None
     try:
         args = parse_merge_args(argv)
@@ -170,7 +194,9 @@ def run(argv, *, records, gh, store_check, out, err) -> int:
         result = None
         for name, stage in STAGES:
             gate.stage = name
-            result = stage(gate)
+            result = (ci_stage if name == "ci" else stage)(gate)
+            if name == "ci":
+                _ci_selection(gate)
         return result
     except Refusal as refusal:
         if gate is not None and gate.merge_called:

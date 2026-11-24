@@ -105,7 +105,7 @@ They run in this order, and the first refusal stops the run.
 | 10 | recheck | the file list and the state read again, equal on every field; stages 3 to 7 and every grant asked again and equal; the default branch's tip is in the head and is the tip stage 9 judged |
 | 11 | merge | the write-ahead intent, then `gh pr merge <URL> --squash --match-head-commit <sha>`, then a read showing MERGED at that head, then the finished record, then the items closed |
 
-Stage 8 counts only runs created after the pull request was marked ready, so every workflow the merge needs must list `ready_for_review` in `on.pull_request.types`. A bare `pull_request:` uses GitHub's default types, which leave out `ready_for_review`, so flipping a draft to ready starts no run and stage 8 refuses `ci_no_runs`.
+Stage 8 counts only runs created after the pull request was marked ready, so every workflow the merge needs must list `ready_for_review` in `on.pull_request.types`. A bare `pull_request:` uses GitHub's default types, which leave out `ready_for_review`, so flipping a draft to ready starts no run and stage 8 refuses `ci_no_runs`. A library caller may supply stage 8 through the keyword-only `gate.run(..., ci_stage=...)`; the command line never can.
 
 ```yaml
 on:
@@ -370,6 +370,13 @@ record in a deciding slot refuses rather than dropping findings on a sibling's w
   change or a move of the default branch after the final reads and before GitHub merges is not seen.
 - A pull request flipped to draft and back to ready between stage 8 and the merge moves READY past
   the runs stage 8 counted, and the draft flag reads the same in both state reads.
+- A library caller supplying its own stage 8 owns what green CI means for its merges; the public
+  command always runs the shipped stage. Review-gate checks only the shape of the selection the
+  supplied stage leaves, not how it judged runs: either a non-empty `expected` dict whose keys
+  and values are non-empty strings with `no_ci_grant` set to `None`, or a `GrantProof` in
+  `no_ci_grant` with `expected` an empty dict. Anything else refuses `ci_stage_selection_invalid`
+  before stage 9. Stage 10 rechecks that grant with `_same_grant`, whichever stage set it;
+  it does not re-judge CI runs.
 - The main-tree proof reader checks the marker step's grammar and conclusion only; it does not check
   that the head or the run the marker names is the one the proof was made for.
 - A grant withdrawn or a new receipt written after the final recheck and before the merge is not seen.
