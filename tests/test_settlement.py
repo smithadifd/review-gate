@@ -517,7 +517,7 @@ def test_partition(fault):
     else:
         source["resolved_carried"] = deepcopy(source["hardened_carried"])
         final["settled_from"]["sha256"] = digest(source)
-    refuses([source, final], "partition", earlier=earlier)
+    refuses([source, final], "entries" if fault == "bad-list" else "partition", earlier=earlier)
 
 
 def alter(value, path, replacement):
