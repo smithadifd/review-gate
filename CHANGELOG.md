@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Document the receipt fields, copyable approving and single-nit JSON examples, and shape refusals at the record step. Exercise both README examples through the real record command and ledger writer.
+
 ## 0.2.3 — Unreleased
 
 - Add `review-gate item --pr <URL> [--lookup]`: find the existing pull request item or atomically create one deterministic ticket and PR link. Retries and concurrent calls do not duplicate events. Lookup is read-only and exits 3 with `pr_item_missing` when absent; ambiguity, source conflicts and competing links refuse without writes.

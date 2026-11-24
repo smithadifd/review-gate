@@ -35,7 +35,7 @@ review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB
 python3 -m review_gate merge ...
 review-gate recover <PR URL> <full head sha> --items ID[,ID...]
 review-gate import --store <absolute directory> --pr <PR URL>
-review-gate record < one-document.json
+review-gate record < sol-round-1.json
 review-gate item --pr <PR URL> [--lookup]
 ```
 
@@ -45,6 +45,8 @@ review-gate item --pr <PR URL> [--lookup]
 - `--items` is required: the ledger items the merge closes, comma separated.
 - `--remediation=` names exactly the jobs that are red on the default branch, for a merge onto a red
   main; it also needs the owner's grant `grant:remediation:<owner>/<repo>#<N>:<head>`.
+- `record` takes a [receipt document](#receipt-document-format), not a summary of a review;
+  copy and fill one of the JSON examples below for each lane.
 
 Anything outside this grammar refuses by name before any read.
 
@@ -157,6 +159,139 @@ than creating it.
 The item must already exist and link the pull request. Resolve it before the first review
 with `review-gate item --pr <URL>`. Neither writer nor importer creates or links items.
 
+### Receipt document format
+
+`record` reads one UTF-8 JSON object, at most 65536 bytes. The tables below describe the
+fields read by `receipt_document.py` and `receipt_writer.py`; unknown fields are preserved
+in the attached bytes but do not supply receipt event fields. Use the exact names:
+`pr_repo`, not `repo`; `reviewed_head`, not `head`; `requested_model` and `served_model`, not `model`.
+
+| Field | Required / type | Value |
+|---|---|---|
+| `pr_repo` | Required string | GitHub `owner/repo` of the PR, not a URL; casefolded for recording. |
+| `pr` | Required integer, ≥ 1 | The PR number in that repository; booleans are not integers here. |
+| `reviewed_head` | Required string | The reviewed commit: exactly 40 lowercase hex characters, equal to the head supplied to merge. |
+| `base` | Required string for a live write | The base commit used for the review comparison: 40 lowercase hex characters. `record` checks its shape, not live GitHub state. Import instead supplies its comparison's merge base. |
+| `changed_files_sha256` | Required string | 64 lowercase hex characters: the file-list digest described below, equal to merge's comparison digest. |
+| `lane` | Required string | Token matching `[a-z0-9][a-z0-9._-]{0,63}`. Merge counts distinct exact lane strings, e.g. `sol` and `claude`; there is no fixed lane-name enum. Changing only the model does not create a second lane. |
+| `tier` | Required string | Same token grammar as `lane`, e.g. `full-live`; merge does not judge the tier against the change. |
+| `round` | Required integer, ≥ 1 | This lane's review round; continues across heads of this PR, not restarted at 1. |
+| `counts_toward_cap` | Required boolean | Whether this round counts toward the review cap; it does not control whether the lane decides. |
+| `requested_model` | Required string, 1–200 characters | The model requested from the review runner. |
+| `verdict` | Required string | Exactly `approved`, `changes_requested`, `unparseable` or `crashed`. Only the first two decide a merge; merge refuses a `changes_requested` receipt with no findings. |
+| `served_model` | Required for deciding verdicts; otherwise optional string or null | Actual model reported by the runner, 1–200 characters when non-null. |
+| `family` | Optional string | If present, must equal the family derived from non-null `served_model`: `anthropic`, `openai`, `google`, or `unknown`. Omit it to let the writer derive it. Unknown models do not satisfy a configured second-family requirement. |
+| `severity_rubric` | Required for deciding verdicts; string | Must equal `v2`. |
+| `findings` | Required for deciding verdicts; array | This round's findings, shaped as below. For `crashed`/`unparseable`, omit or give an empty array. |
+| `hardened_carried` | Required for deciding verdicts; array | Unresolved carried hardens; entries must have `cell: "harden"`. Empty at round 1. |
+| `blocks_carried` | Optional array | Carried blocks, each with `cell: "block"`; default `[]`. |
+| `nits_carried` | Optional array | Carried nits, each with `cell: "nit"`; default `[]`. |
+| `resolved_carried` | Optional array | A located entry with exactly matching `file`, `line`, `description` removes a `hardened_carried` entry. Other entries do not resolve it. |
+| `standing_carried`, `unsettled_carried` | Optional arrays | Checked only for array type; their entries do not add event findings or counts. |
+| `cells` | Required for deciding verdicts; object | Exactly `block`, `harden`, `nit`, each a nonnegative integer. `block` counts own block findings plus all `blocks_carried`; `harden` and `nit` count own findings only. Carried hardens/nits add no cell count. |
+| `open_bugs` | Required for deciding verdicts; nonnegative integer | Must equal `cells.block` and the number of derived block entries. For `crashed`/`unparseable`, omit or give null. |
+| `prior_receipt` | Required at round ≥ 2; object | `{"sha256": "<prior-document-sha256>"}`: 64 lowercase hex characters naming the already-recorded document of this lane's previous round on this PR's item. Forbidden at round 1. This is a document digest, not an event id. |
+| `settled_from`, `adjudicated_from`, `reparsed_from` | Optional objects | Each has `{"sha256": "<source-document-sha256>"}` naming the newest recorded document in the same lane/round/head slot. At most one, except `settled_from` plus `adjudicated_from`: the latter must name the event the former supersedes. These write replacing siblings, but merge currently refuses a replacing record in a deciding slot. |
+
+For deciding verdicts, entries of `findings`, `hardened_carried`, `blocks_carried` and
+`nits_carried` use this shape:
+
+| Entry field | Required / type | Value |
+|---|---|---|
+| `cell` | Required string | Exactly `block` (BUG), `harden` or `nit`; carried lists require their named cell. |
+| `description` | Required string | Finding text; the writer hashes it to derive a stable root when no `residual_root` is supplied. |
+| `file` | Optional string or null | Nonempty locator path, without whitespace, `:` or `#`. Omit/null together with `line` for an unlocated finding. A file without a line gets `/unlocated/<file>:1`; neither gets `/unlocated:1`. |
+| `line` | Optional integer or null | ≥ 1 when supplied; requires `file`. The derived finding id must fit the ledger grammar and be at most 300 characters. |
+| `residual_root` | Optional string or null; required for some carried entries | `<path>:<positive-line>@<16-lowercase-hex>` from the first raise, with no whitespace, `:` or `#` in the path. Reuse the root, not a new hash, for a carried finding. |
+| `residual_of` | Optional value | Any non-null value marks a `findings` entry as carried; its contents are not interpreted. Such an entry requires `prior_receipt` and a non-null `residual_root`. |
+
+Every carried entry requires a prior receipt. Located `nits_carried` entries require a
+non-null `residual_root`; `blocks_carried`, `hardened_carried` and unlocated `nits_carried`
+may instead link through their own derived id's root. That root must exist in the prior
+receipt and lead to one origin. Duplicate ids within a list, or two block entries on one
+id across lists, refuse. Across other lists one id merges into its most severe cell
+(`block` > `harden` > `nit`), carried if any copy is carried; counts must still agree.
+
+Merge reads the derived event's repository, PR, head, file digest, lane, round, verdict,
+served model/family, findings/ids/carried links, counts and cap flag, and verifies its
+attached document digest. Stage 6 also re-derives harden ids from the verified document.
+`base`, `tier` and `requested_model` are recorded metadata, not additional merge gates;
+`severity_rubric`, `cells` and the carried lists participate in document derivation.
+
+To obtain the comparison inputs, read the PR's `headRefOid` and `baseRefOid`, then compare
+that base to that head. Include both previous and current filenames for renames. The digest
+is SHA-256 of sorted, de-duplicated paths encoded as UTF-8 (surrogateescape), each followed
+by a NUL byte, not a patch digest or a hash of JSON. For example:
+
+```sh
+gh pr view "https://github.com/<owner>/<repo>/pull/<pr-number>" --json headRefOid,baseRefOid
+gh api "repos/<owner>/<repo>/compare/<base-sha>...<reviewed-head-sha>" --jq '[.files[] | (.previous_filename // empty), .filename]' > changed-paths.json
+python3 -c 'import json; from review_gate.github import files_digest; print(files_digest(json.load(open("changed-paths.json"))))'
+```
+
+Use the complete comparison file list (GitHub's compare response is capped at 300 files;
+merge refuses a capped list rather than trusting it). `record` itself makes no GitHub read
+and does not obtain these values for you.
+
+#### Approving lane, no findings
+
+Copy this into `sol-round-1.json`. Replace every `<...>` value with the actual review
+inputs; replace the quoted `"<pr-number>"` with an **unquoted integer**. Model placeholders
+mean the real requested/served model ids, not a guessed family. If they differ, put each
+actual id in its corresponding field. For a second lane use a distinct `lane`, as in the
+next example; set counts and findings to that lane's actual result.
+
+```json
+{
+  "pr_repo": "<owner/repo>",
+  "pr": "<pr-number>",
+  "reviewed_head": "<reviewed-head-sha>",
+  "base": "<base-sha>",
+  "changed_files_sha256": "<changed-files-sha256>",
+  "lane": "sol",
+  "tier": "full-live",
+  "round": 1,
+  "counts_toward_cap": true,
+  "requested_model": "<sol-model-id>",
+  "served_model": "<sol-model-id>",
+  "severity_rubric": "v2",
+  "verdict": "approved",
+  "findings": [],
+  "hardened_carried": [],
+  "cells": {"block": 0, "harden": 0, "nit": 0},
+  "open_bugs": 0
+}
+```
+
+#### Approving lane, one nit
+
+Copy this into `claude-round-1.json`, replace the placeholders as above, and replace `line: 1`
+with the finding's actual line. A nit does not increment `open_bugs`.
+
+```json
+{
+  "pr_repo": "<owner/repo>",
+  "pr": "<pr-number>",
+  "reviewed_head": "<reviewed-head-sha>",
+  "base": "<base-sha>",
+  "changed_files_sha256": "<changed-files-sha256>",
+  "lane": "claude",
+  "tier": "full-live",
+  "round": 1,
+  "counts_toward_cap": true,
+  "requested_model": "<claude-model-id>",
+  "served_model": "<claude-model-id>",
+  "severity_rubric": "v2",
+  "verdict": "approved",
+  "findings": [
+    {"file": "<finding-file>", "line": 1, "description": "<nit-description>", "cell": "nit"}
+  ],
+  "hardened_carried": [],
+  "cells": {"block": 0, "harden": 0, "nit": 1},
+  "open_bugs": 0
+}
+```
+
 Import checks the admitted store's seven-column index, exact bytes, repository and number before
 writing. A document whose digest the item already records for the same lane, round and head is
 already recorded, whether the writer or an earlier import recorded it and whatever `base` it was
@@ -173,7 +308,9 @@ rerun completes it without repeating events. No document supplies grants, waiver
 ### Walk step: record one lane result
 
 `review-gate record` reads one writer document from standard input and records it with
-`write_receipt`. Run each lane, then pipe each lane's document in once:
+`write_receipt`. Use the [field tables](#receipt-document-format) and the
+[no-findings](#approving-lane-no-findings) or [one-nit](#approving-lane-one-nit) JSON example
+above. Run each lane, then pipe each lane's document in once:
 
 ```sh
 export LEDGER_DB=/absolute/path/to/ledger.db
@@ -196,6 +333,15 @@ never cut to fit, and empty or closed input refuses `record_empty`. The verb add
 derives nothing: verdict, cells, family, the prior receipt chain and idempotency are the writer's, so
 every refusal the writer already makes (family mismatch, count disagreement, a round restart, a
 second document for an occupied slot, a credential shape) stays refused, with no event written.
+
+Malformed documents refuse before any write: `receipt_doc_not_json` (invalid UTF-8/JSON,
+non-object, repeated keys, non-finite numbers or unpaired surrogates), `receipt_doc_too_large`,
+`receipt_repository_missing` (absent/null `pr_repo`), `pr_url_invalid` (invalid repository
+spelling), `receipt_document_shape` (missing fields, wrong types, formats or chain shape),
+`receipt_family_mismatch`, `receipt_cell_unknown`, `receipt_finding_id_invalid`,
+`receipt_finding_duplicate`, or `receipt_document_inconsistent` (list cells/counts disagree).
+The writer also checks `base` and the derived ledger schema under `receipt_document_shape`
+before appending; credential-shaped content refuses `doc_credential_shape`.
 
 Exit 0 prints one line, `written <PR URL> round=<n> lane=<lane>` or, when the same bytes were
 already recorded for that slot, `already_recorded <PR URL> round=<n> lane=<lane>`; a rerun writes
