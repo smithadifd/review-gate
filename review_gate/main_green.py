@@ -162,6 +162,8 @@ def _check_filter_commits(gh, pr, path: str, head, tip: str, patterns, ignore) -
                 problem = path_problem(changed)
                 if problem is not None:
                     refuse(name, f"{path}: commit {sha} has an unreadable {field}: {problem}")
+                if changed == path:
+                    refuse("main_workflow_path_filtered", f"{path}: commit {sha} changes the workflow definition at {changed!r}")
                 touches = (
                     any(pattern_match(pattern, changed) for pattern in patterns)
                     if patterns is not None else

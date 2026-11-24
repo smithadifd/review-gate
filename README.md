@@ -384,6 +384,7 @@ record in a deciding slot refuses rather than dropping findings on a sibling's w
   that the head or the run the marker names is the one the proof was made for.
 - The push path-filter check does not replay GitHub's own filter evaluation (push diffs and its
   file cap); it bounds that evaluation with the stricter per-commit check against the tip's filter.
+  A later commit changing only a file the workflow uses but its filter does not list (a reusable workflow or a local action) leaves the older run standing as main's status, as GitHub would not run the workflow for that push either.
 - A grant withdrawn or a new receipt written after the final recheck and before the merge is not seen.
 - A second item linking the pull request after intent makes later writes refuse `pr_item_ambiguous`;
   links cannot be removed through this command.

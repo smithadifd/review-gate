@@ -423,6 +423,24 @@ def test_filtered_push_checks_a_renames_previous_filename(rig):
     assert "src/app.py" in result.err
 
 
+def test_filtered_push_checks_its_own_workflow_filename(rig):
+    filtered_history(rig, [[{"filename": CI}]])
+    result = rig.run()
+    assert result.reason == "main_workflow_path_filtered", result.err
+    assert rig.repo.tip in result.err
+    assert CI in result.err
+    assert rig.merge_calls() == []
+
+
+def test_filtered_push_checks_its_own_workflow_previous_filename(rig):
+    filtered_history(rig, [[{"filename": "docs/ci.yml", "previous_filename": CI}]])
+    result = rig.run()
+    assert result.reason == "main_workflow_path_filtered", result.err
+    assert rig.repo.tip in result.err
+    assert CI in result.err
+    assert rig.merge_calls() == []
+
+
 @pytest.mark.parametrize("files,reason", [
     ([{"filename": "docs/guide.md"}], None),
     ([{"filename": "docs/guide.md"}, {"filename": "src/app.py"}], "main_workflow_path_filtered"),
