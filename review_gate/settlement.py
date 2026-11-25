@@ -1,9 +1,11 @@
 """Pure sibling checks over verified, parsed receipt documents; no I/O.
 
 Unlike the toolkit, families come from served_model, not lane names, and
-output digests are shape-checked, not replayed. Group settles and reparses
-refuse because their evidence is not in the ledger. Path metadata is never
-opened or compared. This module is inert until the records port calls it.
+output digests are shape-checked, not replayed. An adjudication may not resolve
+carried findings; the toolkit honours resolved flags set by the seat. Group
+settles and reparses refuse because their evidence is not in the ledger.
+Path metadata is never opened or compared. This module is inert until the
+records port calls it.
 """
 from __future__ import annotations
 
@@ -13,7 +15,6 @@ import json
 import re
 
 from . import ledger_records
-from .receipt_document import finding_id
 from .refusal import refuse
 
 
@@ -94,33 +95,15 @@ def _entries(doc, event):
                 yield entry
 
 
-def _carried_ids(doc, key, event):
-    entries = doc.get(key, [])
-    _need(isinstance(entries, list), event, "carried", ADJUDICATION)
-    return {finding_id(entry) for entry in entries}
+def _adjudication_carried(doc, source, event):
+    keys = ("blocks_carried", "hardened_carried")
+    _need(source["round"] < 2 or all(key in source for key in keys),
+          event, "carried", ADJUDICATION)
+    _need(all(_same(doc.get(key, []), source.get(key, [])) for key in keys)
+          and _same(doc.get("resolved_carried", []), []), event, "carried", ADJUDICATION)
 
 
-def _adjudication_carried(doc, source, earlier, event):
-    required = {key: _carried_ids(source, key, event)
-                for key in ("blocks_carried", "hardened_carried")}
-    if not any(key in source for key in required) and source["round"] >= 2:
-        previous = next((candidate for candidate in reversed(earlier)
-                         if _same(candidate.get("lane"), source["lane"])
-                         and _same(candidate.get("round"), source["round"] - 1)), None)
-        _need(previous is not None, event, "carried", ADJUDICATION)
-        required["blocks_carried"] = _carried_ids(previous, "blocks_carried", event)
-        required["hardened_carried"] = (
-            _carried_ids(previous, "hardened_carried", event)
-            - _carried_ids(previous, "resolved_carried", event))
-        for entry in previous.get("findings", []):
-            key = {"block": "blocks_carried", "harden": "hardened_carried"}.get(entry.get("cell"))
-            if key is not None:
-                required[key].add(finding_id(entry))
-    for key, ids in required.items():
-        _need(ids <= _carried_ids(doc, key, event), event, "carried", ADJUDICATION)
-
-
-def _adjudication(doc, source, earlier, event):
+def _adjudication(doc, source, event):
     _need(source.get("verdict") == "unparseable", event, "source", ADJUDICATION)
     _need(doc.get("verdict") == "approved", event, "verdict", ADJUDICATION)
     _need(all(_text(doc.get(key)) for key in ("adjudicated_by", "adjudication_reason")),
@@ -131,7 +114,7 @@ def _adjudication(doc, source, earlier, event):
           and _same(doc.get("prior_receipt"), source.get("prior_receipt"))
           and ledger_records.family(doc.get("served_model")) is not None,
           event, "copied", ADJUDICATION)
-    _adjudication_carried(doc, source, earlier, event)
+    _adjudication_carried(doc, source, event)
 
 
 def _partition(doc, source, event):
@@ -152,7 +135,7 @@ def _partition(doc, source, event):
     resolved = doc.get("resolved_carried", [])
     _need(_same(resolved[:len(inherited)], inherited), event, "partition")
     available = Counter(_canonical(e) for e in source.get("hardened_carried", []))
-    taken = Counter(_canonical(e) for e in inherited)
+    taken = Counter(_canonical(_strip(e)) for e in inherited)
     for entry in resolved[len(inherited):]:
         _need(isinstance(entry.get("settle"), dict), event, "partition")
         key = _canonical(_strip(entry))
@@ -275,6 +258,7 @@ def _moved(entry, block, doc, earlier, event):
         candidate.get("lane") == doc.get("lane")
         and type(candidate.get("round")) is int and candidate["round"] < doc["round"]
         and candidate.get("reviewed_head") == settle["raised_head"]
+        and isinstance(candidate.get("findings", []), list)
         and any(_id(f) == settle["root"] for f in candidate.get("findings", []))
         for candidate in earlier), event, "raised")
     hunks = settle.get("touched_hunks")
@@ -360,9 +344,9 @@ def check_slot(events, documents, earlier_documents=()):
     ``events`` are one slot's receipt events in ascending id order, exposing
     ``id`` and ``payload`` (supersedes, doc_sha256, findings). ``documents``
     maps each event id to its verified parsed document. ``earlier_documents``
-    contains earlier verified documents on the same item in event-id order;
-    the last document of the preceding lane round decides inherited carry.
-    Lane and round are checked again at the raised-root lookup. The caller verifies
+    contains earlier verified documents on the same item for raised-root lookup,
+    where lane and round are checked again. Carried lists are checked only
+    against the slot's source, not re-derived across rounds. The caller verifies
     document bytes and event/document findings consistency, not this check.
 
     Grammar: plain; plain/adjudicated; plain/settled;
@@ -398,7 +382,7 @@ def check_slot(events, documents, earlier_documents=()):
                   and _same(link["sha256"], previous.payload.get("doc_sha256")), event, "digest", CHAIN)
             source = documents[previous.id]
             if kind == "adjudicated":
-                _adjudication(doc, source, earlier, event)
+                _adjudication(doc, source, event)
             else:
                 if "adjudicated_from" in sources:
                     link = doc["adjudicated_from"]

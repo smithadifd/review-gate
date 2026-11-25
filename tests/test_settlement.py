@@ -285,7 +285,9 @@ def test_adjudication_preserves_source_carried(key, cell, keep):
         final[key] = []
     final["cells"]["block"] = final["open_bugs"] = len(final["blocks_carried"])
     if keep:
-        assert run([source, final])[0].id == 2
+        decision = run([source, final])[0]
+        assert decision.id == 2
+        assert final["open_bugs"] == int(cell == "block")
     else:
         refuses([source, final], "carried", "receipt_adjudication_invalid")
 
@@ -302,13 +304,10 @@ def test_adjudication_preserves_previous_round_open_findings(cell, keep):
     if keep:
         final["blocks_carried" if cell == "block" else "hardened_carried"] = [deepcopy(entry)]
     final["cells"]["block"] = final["open_bugs"] = len(final["blocks_carried"])
-    if keep:
-        assert run([source, final], [previous])[0].id == 2
-    else:
-        refuses([source, final], "carried", "receipt_adjudication_invalid", [previous])
+    refuses([source, final], "carried", "receipt_adjudication_invalid", [previous])
 
 
-def test_adjudication_uses_previous_round_deciding_document():
+def test_adjudication_missing_lists_refuses_despite_previous_decision():
     source = plain(round=3, verdict="unparseable", open_bugs=None)
     del source["blocks_carried"], source["hardened_carried"]
     final = adjudicate(source)
@@ -317,17 +316,18 @@ def test_adjudication_uses_previous_round_deciding_document():
     deciding = plain(round=2)
     other_lane = plain(round=2, lane="lane-b", findings=[finding()])
     other_round = plain(round=1, findings=[finding()])
-    assert run([source, final], [older, deciding, other_lane, other_round])[0].id == 2
+    refuses([source, final], "carried", "receipt_adjudication_invalid",
+            [older, deciding, other_lane, other_round])
 
 
-def test_adjudication_previous_round_excludes_resolved_hardens():
+def test_adjudication_missing_lists_refuses_despite_previous_resolution():
     entry = finding("harden")
     previous = plain(hardened_carried=[entry], resolved_carried=[deepcopy(entry)])
     source = plain(round=3, verdict="unparseable", open_bugs=None)
     del source["blocks_carried"], source["hardened_carried"]
     final = adjudicate(source)
     final.update(blocks_carried=[], hardened_carried=[])
-    assert run([source, final], [previous])[0].id == 2
+    refuses([source, final], "carried", "receipt_adjudication_invalid", [previous])
 
 
 def test_adjudication_missing_previous_round_refuses():
@@ -349,18 +349,21 @@ def test_adjudication_preserves_previous_round_carried_findings(cell, key):
 
 
 @pytest.mark.parametrize("round_number", [1, 2])
-def test_adjudication_without_fallback_when_not_required(round_number):
+def test_adjudication_source_list_presence_by_round(round_number):
     source = plain(round=round_number, verdict="unparseable", open_bugs=None)
     del source["blocks_carried"]
     if round_number == 1:
         del source["hardened_carried"], source["prior_receipt"]
     final = adjudicate(source)
     final.update(blocks_carried=[], hardened_carried=[])
-    assert run([source, final])[0].id == 2
+    if round_number == 1:
+        assert run([source, final])[0].id == 2
+    else:
+        refuses([source, final], "carried", "receipt_adjudication_invalid")
 
 
 @pytest.mark.parametrize("unlocated", [False, True])
-def test_adjudication_carried_uses_canonical_finding_ids(unlocated):
+def test_adjudication_cannot_reword_carried_entries(unlocated):
     entry = finding()
     if unlocated:
         entry.update(file=None, line=None)
@@ -372,16 +375,135 @@ def test_adjudication_carried_uses_canonical_finding_ids(unlocated):
     if not unlocated:
         final["blocks_carried"][0]["description"] = "Reworded with the same canonical root."
     final["cells"]["block"] = final["open_bugs"] = 1
-    assert run([source, final])[0].id == 2
+    refuses([source, final], "carried", "receipt_adjudication_invalid")
 
 
-def test_adjudication_previous_round_ignores_nits():
+def test_adjudication_missing_lists_refuses_despite_previous_nits():
     previous = plain(round=1, findings=[finding("nit")])
     source = plain(verdict="unparseable", open_bugs=None)
     del source["blocks_carried"], source["hardened_carried"]
     final = adjudicate(source)
     final.update(blocks_carried=[], hardened_carried=[])
-    assert run([source, final], [previous])[0].id == 2
+    refuses([source, final], "carried", "receipt_adjudication_invalid", [previous])
+
+
+@pytest.mark.parametrize("middle", ["crashed", "unparseable", "null", "absent"])
+def test_adjudication_missing_lists_after_failed_rounds(middle):
+    previous = plain(round=1, findings=[finding()])
+    previous.pop("prior_receipt")
+    earlier = [previous]
+    if middle != "absent":
+        failed = plain(verdict="unparseable" if middle == "unparseable" else "crashed",
+                       open_bugs=None, findings=None if middle == "null" else [])
+        del failed["blocks_carried"], failed["hardened_carried"]
+        earlier.append(failed)
+    source = plain(round=2 if middle == "absent" else 3,
+                   verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[], open_bugs=0)
+    refuses([source, final], "carried", "receipt_adjudication_invalid", earlier)
+
+
+@pytest.mark.parametrize("missing", ["blocks_carried", "hardened_carried"])
+def test_adjudication_requires_each_source_list(missing):
+    previous = plain(round=1, findings=[finding(), finding("harden")])
+    source = plain(verdict="unparseable", open_bugs=None)
+    del source[missing]
+    final = adjudicate(source)
+    final[missing] = []
+    refuses([source, final], "carried", "receipt_adjudication_invalid", [previous])
+
+
+@pytest.mark.parametrize("change", ["drop", "add", "reorder", "reword", "extra", "path", "number"])
+def test_adjudication_carried_lists_are_canonical_and_exact(change):
+    entry = dict(finding(), residual_root=ident(finding()),
+                 metadata={"flag": True, "output_path": "unread-source"})
+    second = dict(finding(), line=9)
+    source = plain(verdict="unparseable", open_bugs=None, blocks_carried=[entry, second])
+    final = adjudicate(source)
+    carried = final["blocks_carried"]
+    if change == "drop":
+        carried.pop()
+    elif change == "add":
+        carried.append(dict(finding(), line=12))
+    elif change == "reorder":
+        carried.reverse()
+    elif change == "reword":
+        carried[0]["description"] = "A different description on the same root."
+    elif change == "extra":
+        carried[0]["detail"] = "Additional context."
+    elif change == "path":
+        carried[0]["metadata"]["output_path"] = "unread-output"
+    else:
+        carried[0]["metadata"]["flag"] = 1
+    final["cells"]["block"] = final["open_bugs"] = len(carried)
+    if change == "path":
+        assert run([source, final])[0].id == 2
+    else:
+        refuses([source, final], "carried", "receipt_adjudication_invalid")
+
+
+@pytest.mark.parametrize("resolution", ["effective", "unlocated", "reworded-root", "empty", "absent"])
+def test_adjudication_may_not_resolve_carried_harden(resolution):
+    entry = finding("harden")
+    entry["residual_root"] = ident(entry)
+    source = plain(verdict="unparseable", open_bugs=None, hardened_carried=[entry])
+    final = adjudicate(source)
+    final["open_bugs"] = 0
+    resolved = deepcopy(entry)
+    if resolution == "unlocated":
+        resolved.update(file=None, line=None)
+    elif resolution == "reworded-root":
+        resolved["description"] = "A different description with the same root."
+    if resolution == "absent":
+        del final["resolved_carried"]
+    elif resolution != "empty":
+        final["resolved_carried"] = [resolved]
+    if resolution in ("empty", "absent"):
+        assert run([source, final])[0].id == 2
+    else:
+        refuses([source, final], "carried", "receipt_adjudication_invalid")
+
+
+@pytest.mark.parametrize("variant", ["unlocated", "reworded-root"])
+def test_adjudication_missing_lists_with_ineffective_previous_resolution(variant):
+    entry = finding("harden")
+    if variant == "unlocated":
+        entry.update(file=None, line=None)
+    else:
+        entry["residual_root"] = ident(entry)
+    resolved = deepcopy(entry)
+    if variant == "reworded-root":
+        resolved["description"] = "This does not resolve the earlier harden."
+    first = plain(round=1, findings=[deepcopy(entry)])
+    previous = plain(hardened_carried=[entry], resolved_carried=[resolved])
+    source = plain(round=3, verdict="unparseable", open_bugs=None)
+    del source["blocks_carried"], source["hardened_carried"]
+    final = adjudicate(source)
+    final.update(blocks_carried=[], hardened_carried=[], open_bugs=0)
+    refuses([source, final], "carried", "receipt_adjudication_invalid", [first, previous])
+
+
+@pytest.mark.parametrize("round_number", [1, 2])
+@pytest.mark.parametrize("omit_final", [False, True])
+def test_adjudication_empty_source_lists_do_not_rederive_previous_carry(round_number, omit_final):
+    previous = plain(round=1, findings=[finding()])
+    del previous["prior_receipt"]
+    source = plain(round=round_number, verdict="unparseable", open_bugs=None)
+    if round_number == 1:
+        del source["blocks_carried"], source["hardened_carried"], source["prior_receipt"]
+    final = adjudicate(source)
+    final["open_bugs"] = 0
+    if omit_final:
+        final.pop("blocks_carried", None)
+        final.pop("hardened_carried", None)
+    earlier = [previous] if round_number == 2 else []
+    assert run([source, final], earlier)[0].id == 2
+    counted = plain(round=round_number)
+    if round_number == 1:
+        del counted["prior_receipt"]
+    assert run([counted], earlier)[0].id == 1
 
 
 @pytest.mark.parametrize("which", ["settled_from", "adjudicated_from"])
@@ -520,6 +642,18 @@ def test_partition(fault):
     refuses([source, final], "entries" if fault == "bad-list" else "partition", earlier=earlier)
 
 
+@pytest.mark.parametrize("inherited_settle", [False, True])
+def test_inherited_harden_cannot_be_resolved_twice(inherited_settle):
+    entry = finding("harden")
+    inherited = dict(deepcopy(entry), settle=settle_record(entry)) if inherited_settle else deepcopy(entry)
+    source = plain(hardened_carried=[entry], resolved_carried=[inherited])
+    final = settled(source)
+    if not inherited_settle:
+        final["resolved_carried"].append(dict(deepcopy(entry), settle=settle_record(entry)))
+    earlier = [plain(round=1, reviewed_head=RAISED, findings=[entry])]
+    refuses([source, final], "partition", earlier=earlier)
+
+
 def alter(value, path, replacement):
     keys = path.split(".")
     for key in keys[:-1]:
@@ -597,6 +731,17 @@ def test_root_must_have_been_raised(fault):
     else:
         earlier[0]["findings"] = []
     refuses([source, final], "raised", earlier=earlier)
+
+
+@pytest.mark.parametrize("real_raiser", [False, True])
+def test_raised_lookup_ignores_null_findings(real_raiser):
+    source, final, earlier = context()
+    null = plain(round=1, reviewed_head=RAISED, verdict="crashed", findings=None, open_bugs=None)
+    candidates = [null] + earlier if real_raiser else [null]
+    if real_raiser:
+        assert run([source, final], candidates)[0].id == 2
+    else:
+        refuses([source, final], "raised", earlier=candidates)
 
 
 @pytest.mark.parametrize("path,value", [
@@ -761,3 +906,33 @@ def test_plain_resolved_settle_record_is_unbound():
     doc = plain(hardened_carried=[entry],
                 resolved_carried=[dict(entry, settle=settle_record(entry))])
     refuses([doc], "unbound")
+
+
+@pytest.mark.parametrize("grammar", ["plain", "adjudicated", "settled", "settled-adjudicated", "open"])
+@pytest.mark.parametrize("key", [
+    "findings", "blocks_carried", "hardened_carried", "nits_carried", "resolved_carried", "fixed_by_delta",
+])
+def test_null_lists_never_escape_as_other_exceptions(grammar, key):
+    source, final, earlier = context()
+    if grammar == "plain":
+        docs = [plain()]
+    elif grammar == "adjudicated":
+        original = plain(verdict="unparseable", open_bugs=None)
+        docs = [original, adjudicate(original)]
+    elif grammar == "settled":
+        docs = [source, final]
+    elif grammar == "settled-adjudicated":
+        original = dict(source, verdict="unparseable", open_bugs=None)
+        approved = adjudicate(original)
+        docs = [original, approved, settled(approved)]
+    else:
+        source, final = open_context()
+        docs = [source, final]
+    for index in range(len(docs) + len(earlier)):
+        changed_docs, changed_earlier = deepcopy((docs, earlier))
+        (changed_docs + changed_earlier)[index][key] = None
+        try:
+            decision, events = run(changed_docs, changed_earlier)
+        except Refusal:
+            continue
+        assert decision is events[-1]
