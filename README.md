@@ -33,6 +33,7 @@ read stages use fresh read-only connections. Receipt writing and indexed-store i
 ```sh
 review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
 python3 -m review_gate merge ...
+review-gate check <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
 review-gate recover <PR URL> <full head sha> --items ID[,ID...]
 review-gate import --store <absolute directory> --pr <PR URL>
 review-gate record < sol-round-1.json
@@ -49,6 +50,11 @@ review-gate item --pr <PR URL> [--lookup]
   copy and fill one of the JSON examples below for each lane.
 
 Anything outside this grammar refuses by name before any read.
+
+`check` runs merge's stages 0 to 10, prints `would-merge` or the refusal, writes nothing,
+and merges nothing. A pass is not a promise: state can move between `check` and `merge`,
+and `merge` decides again from stage 0. Concurrent GitHub and ledger writers remain visible
+to the recheck; a stopped or repeated `check` leaves no intent or other ledger event to recover.
 
 ### Find or create the pull request's item
 
@@ -84,10 +90,12 @@ store-level uniqueness remains follow-up `LEDGER-PR-LINK-UNIQUE1`.
 | Exit | Meaning | Output |
 |---|---|---|
 | 0 | merged and recorded | one stdout line: `merged <URL> head=<sha> merge_commit=<oid>` |
+| 0 | check passed stages 0 to 10; nothing written or merged | one stdout line: `would-merge <URL> head=<sha>` |
 | 2 | refused; nothing merged | one stderr line that starts with the refusal's name: `<name>: <detail>` |
 | 4 | a merge call was made and its outcome is not confirmed in the records | one stderr line: `merge_unconfirmed: ...` or `merge_finish_unrecorded: ...` |
 
 An error that escapes a stage is a named refusal (`internal_error`), never a traceback.
+`check` exits only 0 (would merge) or 2 (refused, including internal errors), never 4.
 Each `gh` process has a 60-second deadline; a stalled process refuses `gh_timeout`.
 
 ## The stages
@@ -105,7 +113,7 @@ They run in this order, and the first refusal stops the run.
 | 10 | recheck | the file list and the state read again, equal on every field; stages 3 to 7 and every grant asked again and equal; the default branch's tip is in the head and is the tip stage 9 judged |
 | 11 | merge | the write-ahead intent, then `gh pr merge <URL> --squash --match-head-commit <sha>`, then a read showing MERGED at that head, then the finished record, then the items closed |
 
-Stage 8 counts only runs created after the pull request was marked ready, so every workflow the merge needs must list `ready_for_review` in `on.pull_request.types`. A bare `pull_request:` uses GitHub's default types, which leave out `ready_for_review`, so flipping a draft to ready starts no run and stage 8 refuses `ci_no_runs`.
+Stage 8 counts only runs created after the pull request was marked ready, so every workflow the merge needs must list `ready_for_review` in `on.pull_request.types`. A bare `pull_request:` uses GitHub's default types, which leave out `ready_for_review`, so flipping a draft to ready starts no run and stage 8 refuses `ci_no_runs`. A library caller may supply stage 8 through the keyword-only `gate.run(..., ci_stage=...)` or `gate.check(..., ci_stage=...)`; both take the same keyword-only arguments, and the command line never can replace stage 8.
 
 ```yaml
 on:
@@ -388,6 +396,13 @@ record in a deciding slot refuses rather than dropping findings on a sibling's w
   change or a move of the default branch after the final reads and before GitHub merges is not seen.
 - A pull request flipped to draft and back to ready between stage 8 and the merge moves READY past
   the runs stage 8 counted, and the draft flag reads the same in both state reads.
+- A library caller supplying its own stage 8 owns what green CI means for its merges; the public
+  command always runs the shipped stage. Review-gate checks only the shape of the selection the
+  supplied stage leaves, not how it judged runs: either a non-empty `expected` dict whose keys
+  and values are non-empty strings with `no_ci_grant` set to `None`, or a `GrantProof` in
+  `no_ci_grant` with `expected` an empty dict. Anything else refuses `ci_stage_selection_invalid`
+  before stage 9. Stage 10 rechecks that grant with `_same_grant`, whichever stage set it;
+  it does not re-judge CI runs.
 - The main-tree proof reader checks the marker step's grammar and conclusion only; it does not check
   that the head or the run the marker names is the one the proof was made for.
 - The push path-filter check does not replay GitHub's own filter evaluation (push diffs and its
