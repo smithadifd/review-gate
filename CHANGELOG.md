@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 — 2026-11-25
+
+- A library caller may supply stage 8 through the keyword-only `gate.run(..., ci_stage=...)`; the command line never can (`--ci-stage=...` refuses `argument_unknown`). The selection is checked before stage 9; invalid shapes refuse `ci_stage_selection_invalid`. (#18)
+- Stage 9 judges a selected path-filtered push workflow by its newest run on an ancestor of the default branch's tip when no later commit touches a path admitted by the tip's filter or the workflow's own file. All existing run checks still apply. A touching commit refuses `main_workflow_path_filtered`; unreadable, malformed, capped, non-ancestor or merge-commit reads refuse `main_filter_commits_unreadable`. Unfiltered workflows still refuse stale runs with `main_ci_run_stale`. (#19)
+- Add `review-gate check`: run stages 0 to 10 and write nothing, with no write-ahead and no merge. A pass prints `would-merge <URL> head=<sha>` and exits 0; a refusal prints the merge's refusal and exits 2. (#21)
+- Add a settlement module that checks settled and adjudicated sibling receipt chains over their verified parsed documents. Invalid chains refuse `receipt_sibling_chain_invalid`; invalid adjudication or settlement content refuses `receipt_adjudication_invalid` or `receipt_settlement_invalid`. Group settles and reparses refuse `receipt_settlement_group_unsupported` and `receipt_reparse_unsupported`. The module ships inert: nothing calls it yet, and the merge still refuses a replacing record in a deciding slot with `receipt_settlement_unsupported`. Wiring is reserved for v0.4.1. (#20)
+
+Install with `@v0.4.0`.
+
 ## 0.3.1 — 2026-11-24
 
 - Document the required `ready_for_review` workflow trigger, with a copyable YAML example and the stage 8 refusal when no run starts after a draft is marked ready. (#16)
