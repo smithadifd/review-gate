@@ -40,6 +40,8 @@ ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 DOT_SEGMENTS = (".", "..")
 COMMAND = "merge"
 USAGE = "review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]"
+CHECK_COMMAND = "check"
+CHECK_USAGE = "review-gate check <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]"
 RECOVERY_COMMAND = "recover"
 RECOVERY_USAGE = "review-gate recover <PR URL> <full head sha> --items ID[,ID...]"
 
@@ -134,6 +136,10 @@ def parse_merge_args(argv) -> MergeArgs:
     return _parse_args(argv, command=COMMAND, usage=USAGE, remediation_allowed=True)
 
 
+def parse_check_args(argv) -> MergeArgs:
+    return _parse_args(argv, command=CHECK_COMMAND, usage=CHECK_USAGE, remediation_allowed=True)
+
+
 def parse_recovery_args(argv) -> MergeArgs:
     """The merge grammar with verb ``recover`` and no remediation argument."""
     return _parse_args(argv, command=RECOVERY_COMMAND, usage=RECOVERY_USAGE, remediation_allowed=False)
@@ -188,7 +194,7 @@ def _parse_args(argv, *, command, usage, remediation_allowed) -> MergeArgs:
     pr = parse_pr_url(url)
     sha = parse_sha(sha)
     if items_value is None:
-        refuse("items_missing", "--items is required: name the items this merge closes")
+        refuse("items_missing", f"--items is required: name the items this merge closes; usage: {usage}")
     items = parse_items(items_value)
     remediation = None if remediation_value is None else parse_remediation(remediation_value)
     return MergeArgs(pr=pr, url=pr.url, sha=sha, items=items, remediation=remediation)

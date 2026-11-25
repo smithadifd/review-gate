@@ -33,6 +33,7 @@ read stages use fresh read-only connections. Receipt writing and indexed-store i
 ```sh
 review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
 python3 -m review_gate merge ...
+review-gate check <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
 review-gate recover <PR URL> <full head sha> --items ID[,ID...]
 review-gate import --store <absolute directory> --pr <PR URL>
 review-gate record < sol-round-1.json
@@ -49,6 +50,11 @@ review-gate item --pr <PR URL> [--lookup]
   copy and fill one of the JSON examples below for each lane.
 
 Anything outside this grammar refuses by name before any read.
+
+`check` runs merge's stages 0 to 10, prints `would-merge` or the refusal, writes nothing,
+and merges nothing. A pass is not a promise: state can move between `check` and `merge`,
+and `merge` decides again from stage 0. Concurrent GitHub and ledger writers remain visible
+to the recheck; a stopped or repeated `check` leaves no intent or other ledger event to recover.
 
 ### Find or create the pull request's item
 
@@ -84,10 +90,12 @@ store-level uniqueness remains follow-up `LEDGER-PR-LINK-UNIQUE1`.
 | Exit | Meaning | Output |
 |---|---|---|
 | 0 | merged and recorded | one stdout line: `merged <URL> head=<sha> merge_commit=<oid>` |
+| 0 | check passed stages 0 to 10; nothing written or merged | one stdout line: `would-merge <URL> head=<sha>` |
 | 2 | refused; nothing merged | one stderr line that starts with the refusal's name: `<name>: <detail>` |
 | 4 | a merge call was made and its outcome is not confirmed in the records | one stderr line: `merge_unconfirmed: ...` or `merge_finish_unrecorded: ...` |
 
 An error that escapes a stage is a named refusal (`internal_error`), never a traceback.
+`check` exits only 0 (would merge) or 2 (refused, including internal errors), never 4.
 Each `gh` process has a 60-second deadline; a stalled process refuses `gh_timeout`.
 
 ## The stages
@@ -101,11 +109,11 @@ They run in this order, and the first refusal stops the run.
 | 2 | state read 1 | the head equals the sha; the pull request is open, not a draft, based on the default branch and not from a fork; the comparison's file list and its digest |
 | 3-7 | records | the item, the receipts, open bugs, hardening and the round cap, each answered by the records port |
 | 8 | CI | every run bound to this pull request by its trigger fields and created after READY is green at job grain (a skipped job is not success), and every workflow the pull request's paths select has such a run; with no workflow file, `unchecked_head` unless `grant:no-ci:<owner>/<repo>` stands |
-| 9 | main is green | for each selected workflow, by its file path: main's newest push run is on the default branch's tip and green at job grain, a skipped job only with a valid main-tree proof; red jobs only with an exact `--remediation=` and its grant |
+| 9 | main is green | for each selected workflow, by its file path: main's newest push run is on the default branch's tip, or an ancestor when every later commit changes no path admitted by the tip's push path filter; the run is green at job grain, a skipped job only with a valid main-tree proof; red jobs only with an exact `--remediation=` and its grant |
 | 10 | recheck | the file list and the state read again, equal on every field; stages 3 to 7 and every grant asked again and equal; the default branch's tip is in the head and is the tip stage 9 judged |
 | 11 | merge | the write-ahead intent, then `gh pr merge <URL> --squash --match-head-commit <sha>`, then a read showing MERGED at that head, then the finished record, then the items closed |
 
-Stage 8 counts only runs created after the pull request was marked ready, so every workflow the merge needs must list `ready_for_review` in `on.pull_request.types`. A bare `pull_request:` uses GitHub's default types, which leave out `ready_for_review`, so flipping a draft to ready starts no run and stage 8 refuses `ci_no_runs`.
+Stage 8 counts only runs created after the pull request was marked ready, so every workflow the merge needs must list `ready_for_review` in `on.pull_request.types`. A bare `pull_request:` uses GitHub's default types, which leave out `ready_for_review`, so flipping a draft to ready starts no run and stage 8 refuses `ci_no_runs`. A library caller may supply stage 8 through the keyword-only `gate.run(..., ci_stage=...)` or `gate.check(..., ci_stage=...)`; both take the same keyword-only arguments, and the command line never can replace stage 8.
 
 ```yaml
 on:
@@ -114,6 +122,24 @@ on:
 ```
 
 The module docstrings carry each stage's full rules and refusal names.
+
+Stage 9 checks path-filtered push workflows per commit, not against the aggregate diff: GitHub
+judges a push by that push's diff, and the union of per-commit file lists covers every push diff
+in the range, so this check is never looser. It uses the filter at the tip, including both names
+of a renamed file. A touching commit refuses `main_workflow_path_filtered`, naming the commit
+and path. An unreadable, malformed, capped, non-ancestor or merge-commit read refuses
+`main_filter_commits_unreadable`: the compare must enumerate fewer than 250 commits exactly,
+and each single-parent commit must list fewer than 300 files. Unfiltered workflows still
+require a run on the tip (`main_ci_run_stale` otherwise). All checks on the newest run still
+apply; stage 10 still compares the default branch's tip, not the older run's head.
+
+If the push filter does not list the workflow's own file and a commit changes only that file,
+GitHub starts no run and main's newest run stays on an older commit. Stage 9 refuses
+`main_workflow_path_filtered` when a later commit's `filename` or `previous_filename` is the
+workflow's own path, whatever the filter says: it is the definition being judged. Nothing in
+the gate clears this state; `--remediation` does not apply because it needs red jobs.
+Prevent it by listing the workflow's own path in its push filter. Clear it with a push to
+the default branch, outside the gate, that touches an admitted path.
 
 ## Record rules and recovery
 
@@ -370,8 +396,21 @@ record in a deciding slot refuses rather than dropping findings on a sibling's w
   change or a move of the default branch after the final reads and before GitHub merges is not seen.
 - A pull request flipped to draft and back to ready between stage 8 and the merge moves READY past
   the runs stage 8 counted, and the draft flag reads the same in both state reads.
+- A library caller supplying its own stage 8 owns what green CI means for its merges; the public
+  command always runs the shipped stage. Review-gate checks only the shape of the selection the
+  supplied stage leaves, not how it judged runs: either a non-empty `expected` dict whose keys
+  and values are non-empty strings with `no_ci_grant` set to `None`, or a `GrantProof` in
+  `no_ci_grant` with `expected` an empty dict. Anything else refuses `ci_stage_selection_invalid`
+  before stage 9. Stage 10 rechecks that grant with `_same_grant`, whichever stage set it;
+  it does not re-judge CI runs.
 - The main-tree proof reader checks the marker step's grammar and conclusion only; it does not check
   that the head or the run the marker names is the one the proof was made for.
+- The push path-filter check does not replay GitHub's own filter evaluation (push diffs and its
+  file cap); it bounds that evaluation with the stricter per-commit check against the tip's filter.
+  A later commit changing only a reusable workflow or local action that the filter does not list
+  leaves the older run standing as main's status, as GitHub would not run the workflow for that
+  push either. This is an accepted residual; the workflow's own file instead refuses because it
+  is the definition being judged.
 - A grant withdrawn or a new receipt written after the final recheck and before the merge is not seen.
 - A second item linking the pull request after intent makes later writes refuse `pr_item_ambiguous`;
   links cannot be removed through this command.

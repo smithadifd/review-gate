@@ -1,6 +1,7 @@
 """The ``review-gate`` command line.
 
     review-gate merge <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
+    review-gate check <PR URL> <full head sha> --items ID[,ID...] [--remediation=JOB[,JOB...]]
     review-gate recover <PR URL> <full head sha> --items ID[,ID...]
     review-gate import --store <absolute directory> --pr <PR URL>
     review-gate record < one-document.json
@@ -17,7 +18,7 @@ import os
 import shutil
 import sys
 
-from .gate import run
+from .gate import check, run
 from .gh import GhTransport
 from .records import UnfilledRecords
 from .ledger_records import LedgerRecords
@@ -33,6 +34,7 @@ def main(argv=None) -> int:
     runner = (resolve_item if argv and argv[0] == "item" else
               import_receipts if argv and argv[0] == "import" else
               record_receipt if argv and argv[0] == "record" else
+              check if argv and argv[0] == "check" else
               recover if argv and argv[0] == "recover" else run)
     database = os.environ.get("LEDGER_DB")
     return runner(

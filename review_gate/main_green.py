@@ -16,10 +16,15 @@ path order:
   repository (``main_run_misselected`` otherwise; the server-side filter is
   not trusted alone). No run refuses ``main_ci_run_missing``; it is never
   skipped.
-- The newest run (by creation time, then id) must be on T. When it is not,
-  a path-filtered push workflow refuses ``main_workflow_path_filtered`` (its
-  tip commit may have started no run) and any other refuses
-  ``main_ci_run_stale``.
+- The newest run (by creation time, then id) must be on T, except for a
+  path-filtered push workflow: its newest run may be on an ancestor when
+  every later commit through T touches no path admitted by the push filter
+  at T. A touching commit refuses ``main_workflow_path_filtered``, naming
+  its sha and path. A later commit whose ``filename`` or ``previous_filename``
+  is the workflow's own path also refuses ``main_workflow_path_filtered``,
+  whatever the filter says. An unreadable or capped compare or commit read,
+  doubtful ancestry, or a merge commit refuses ``main_filter_commits_unreadable``.
+  An unfiltered workflow's run behind T still refuses ``main_ci_run_stale``.
 - The run must be completed (``main_ci_run_pending``). Its jobs are read
   through every page (``main_ci_jobs_unreadable``). A skipped job passes only
   with a valid main-tree proof in that run (one job named ``main tree proof``
@@ -56,10 +61,10 @@ import re
 import urllib.parse
 
 from .gh import api_json
-from .github import blob_text, default_tip, is_count, parse_time, run_jobs, same_repository, workflow_files
+from .github import OID, blob_text, default_tip, is_count, parse_time, path_problem, run_jobs, same_repository, workflow_files
 from .records import ask_grant, remediation_grant_id
 from .refusal import refuse
-from .workflows import NO_PUSH, PATH_FILTERED, load_workflow, push_trigger
+from .workflows import NO_PUSH, PATH_FILTERED, ignore_match, load_workflow, pattern_match, push_path_filter, push_trigger
 
 PROOF_JOB_NAME = "main tree proof"
 MARKER = re.compile(r"Main tree proof: head [0-9a-f]{40} run [0-9]+")
@@ -117,6 +122,62 @@ def newest_push_run(gh, pr, path: str, default: str):
     return None if newest is None else newest[1]
 
 
+def _check_filter_commits(gh, pr, path: str, head, tip: str, patterns, ignore) -> None:
+    """An exact linear range after ``head`` touches nothing the tip's push filter admits."""
+    name = "main_filter_commits_unreadable"
+    if not isinstance(head, str) or not OID.fullmatch(head):
+        refuse(name, f"{path}: the newest push run has no full head sha")
+    endpoint = f"repos/{pr.owner}/{pr.repo}/compare/{head}...{tip}"
+    compare = api_json(gh, endpoint, name)
+    if not isinstance(compare, dict):
+        refuse(name, f"{path}: the comparison is not an object")
+    ahead = compare.get("ahead_by")
+    behind = compare.get("behind_by")
+    if compare.get("status") != "ahead" or not is_count(behind) or behind != 0 or not is_count(ahead) or ahead < 1:
+        refuse(name, f"{path}: {head} is not a proven ancestor of {tip}")
+    commits = compare.get("commits")
+    if not isinstance(commits, list) or len(commits) != ahead or len(commits) >= 250:
+        refuse(name, f"{path}: the comparison's commit list is incomplete or capped")
+    parent = head
+    for entry in commits:
+        sha = entry.get("sha") if isinstance(entry, dict) else None
+        if not isinstance(sha, str) or not OID.fullmatch(sha):
+            refuse(name, f"{path}: the comparison has a commit without a full sha")
+        commit = api_json(gh, f"repos/{pr.owner}/{pr.repo}/commits/{sha}", name)
+        if not isinstance(commit, dict) or commit.get("sha") != sha:
+            refuse(name, f"{path}: commit {sha} is malformed or misbound")
+        parents = commit.get("parents")
+        if not isinstance(parents, list) or len(parents) != 1:
+            refuse(name, f"{path}: commit {sha} is not a single-parent commit")
+        if not isinstance(parents[0], dict) or parents[0].get("sha") != parent:
+            refuse(name, f"{path}: commit {sha} does not continue the exact ancestor range")
+        files = commit.get("files")
+        if not isinstance(files, list) or len(files) >= 300:
+            refuse(name, f"{path}: commit {sha} has an unreadable or capped file list")
+        for file in files:
+            if not isinstance(file, dict):
+                refuse(name, f"{path}: commit {sha} has a malformed file")
+            for field in ("filename", "previous_filename"):
+                if field == "previous_filename" and field not in file:
+                    continue
+                changed = file.get(field)
+                problem = path_problem(changed)
+                if problem is not None:
+                    refuse(name, f"{path}: commit {sha} has an unreadable {field}: {problem}")
+                if changed == path:
+                    refuse("main_workflow_path_filtered", f"{path}: commit {sha} changes the workflow definition at {changed!r}")
+                touches = (
+                    any(pattern_match(pattern, changed) for pattern in patterns)
+                    if patterns is not None else
+                    not any(ignore_match(pattern, changed) for pattern in ignore)
+                )
+                if touches:
+                    refuse("main_workflow_path_filtered", f"{path}: commit {sha} touches {changed!r}, admitted by the push filter at {tip}")
+        parent = sha
+    if parent != tip:
+        refuse(name, f"{path}: the comparison's commits do not reach tip {tip}")
+
+
 def _judge(gate, path: str, tip_files: dict, tip: str, default: str):
     """(run, red job names) for one subject, after every refusal no grant lifts."""
     pr = gate.args.pr
@@ -135,11 +196,10 @@ def _judge(gate, path: str, tip_files: dict, tip: str, default: str):
     label = f"main's newest push run {run['id']} of {path}"
     if run.get("head_sha") != tip:
         if trigger == PATH_FILTERED:
-            refuse(
-                "main_workflow_path_filtered",
-                f"{label} is on {run.get('head_sha')!r}, not the tip {tip}; {path} filters its push paths",
-            )
-        refuse("main_ci_run_stale", f"{label} is on {run.get('head_sha')!r}, not the tip {tip}")
+            patterns, ignore = push_path_filter(path, doc)
+            _check_filter_commits(gate.gh, pr, path, run.get("head_sha"), tip, patterns, ignore)
+        else:
+            refuse("main_ci_run_stale", f"{label} is on {run.get('head_sha')!r}, not the tip {tip}")
     if run.get("status") != "completed":
         refuse("main_ci_run_pending", f"{label} status={run.get('status')!r}")
     jobs = run_jobs(gate.gh, pr, run["id"], "main_ci_jobs_unreadable")

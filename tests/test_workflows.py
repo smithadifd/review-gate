@@ -13,6 +13,7 @@ from review_gate.workflows import (
     load_workflow,
     pattern_match,
     push_trigger,
+    push_path_filter,
     selected_workflows,
 )
 
@@ -118,3 +119,29 @@ def test_patterns():
     assert not branch_filter_regex("feature/*").fullmatch("feature/x/y")
     assert branch_filter_regex("release/**/stable").fullmatch("release/stable")
     assert branch_filter_regex("a?b") is None
+
+
+@pytest.mark.parametrize("trigger,expected", [
+    ("push", (None, None)),
+    ("pull_request", (None, None)),
+    ("[push]", (None, None)),
+    ("\n  push:\n    paths: ['src/**', '*.py']", (["src/**", "*.py"], None)),
+    ("\n  push:\n    paths-ignore: ['docs/**']", (None, ["docs/**"])),
+])
+def test_push_path_filters(trigger, expected):
+    doc = load_workflow("x", f"on: {trigger}\n")
+    assert push_path_filter("x", doc) == expected
+
+
+@pytest.mark.parametrize("filters", [
+    "paths: ['!src/**']", "paths: ['src/[ab]*']", "paths: ['src/**.py']",
+    "paths: []", "paths: src", "paths: [7]",
+    "paths-ignore: ['!docs/**']", "paths-ignore: ['docs/{a,b}']",
+    "paths-ignore: ['docs/a b']", "paths-ignore: []",
+    "paths: ['src/**']\n    paths-ignore: ['docs/**']",
+])
+def test_unreadable_push_path_patterns_refuse(filters):
+    doc = load_workflow("x", f"on:\n  push:\n    {filters}\n")
+    with pytest.raises(Refusal) as refused:
+        push_path_filter("x", doc)
+    assert refused.value.name == "workflow_paths_unreadable"
