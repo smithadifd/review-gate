@@ -109,7 +109,7 @@ They run in this order, and the first refusal stops the run.
 | 2 | state read 1 | the head equals the sha; the pull request is open, not a draft, based on the default branch and not from a fork; the comparison's file list and its digest |
 | 3-7 | records | the item, the receipts, open bugs, hardening and the round cap, each answered by the records port |
 | 8 | CI | every run bound to this pull request by its trigger fields and created after READY is green at job grain (a skipped job is not success), and every workflow the pull request's paths select has such a run; with no workflow file, `unchecked_head` unless `grant:no-ci:<owner>/<repo>` stands |
-| 9 | main is green | for each selected workflow, by its file path: main's newest push run is on the default branch's tip and green at job grain, a skipped job only with a valid main-tree proof; red jobs only with an exact `--remediation=` and its grant |
+| 9 | main is green | for each selected workflow, by its file path: main's newest push run is on the default branch's tip, or an ancestor when every later commit changes no path admitted by the tip's push path filter; the run is green at job grain, a skipped job only with a valid main-tree proof; red jobs only with an exact `--remediation=` and its grant |
 | 10 | recheck | the file list and the state read again, equal on every field; stages 3 to 7 and every grant asked again and equal; the default branch's tip is in the head and is the tip stage 9 judged |
 | 11 | merge | the write-ahead intent, then `gh pr merge <URL> --squash --match-head-commit <sha>`, then a read showing MERGED at that head, then the finished record, then the items closed |
 
@@ -122,6 +122,24 @@ on:
 ```
 
 The module docstrings carry each stage's full rules and refusal names.
+
+Stage 9 checks path-filtered push workflows per commit, not against the aggregate diff: GitHub
+judges a push by that push's diff, and the union of per-commit file lists covers every push diff
+in the range, so this check is never looser. It uses the filter at the tip, including both names
+of a renamed file. A touching commit refuses `main_workflow_path_filtered`, naming the commit
+and path. An unreadable, malformed, capped, non-ancestor or merge-commit read refuses
+`main_filter_commits_unreadable`: the compare must enumerate fewer than 250 commits exactly,
+and each single-parent commit must list fewer than 300 files. Unfiltered workflows still
+require a run on the tip (`main_ci_run_stale` otherwise). All checks on the newest run still
+apply; stage 10 still compares the default branch's tip, not the older run's head.
+
+If the push filter does not list the workflow's own file and a commit changes only that file,
+GitHub starts no run and main's newest run stays on an older commit. Stage 9 refuses
+`main_workflow_path_filtered` when a later commit's `filename` or `previous_filename` is the
+workflow's own path, whatever the filter says: it is the definition being judged. Nothing in
+the gate clears this state; `--remediation` does not apply because it needs red jobs.
+Prevent it by listing the workflow's own path in its push filter. Clear it with a push to
+the default branch, outside the gate, that touches an admitted path.
 
 ## Record rules and recovery
 
@@ -387,6 +405,12 @@ record in a deciding slot refuses rather than dropping findings on a sibling's w
   it does not re-judge CI runs.
 - The main-tree proof reader checks the marker step's grammar and conclusion only; it does not check
   that the head or the run the marker names is the one the proof was made for.
+- The push path-filter check does not replay GitHub's own filter evaluation (push diffs and its
+  file cap); it bounds that evaluation with the stricter per-commit check against the tip's filter.
+  A later commit changing only a reusable workflow or local action that the filter does not list
+  leaves the older run standing as main's status, as GitHub would not run the workflow for that
+  push either. This is an accepted residual; the workflow's own file instead refuses because it
+  is the definition being judged.
 - A grant withdrawn or a new receipt written after the final recheck and before the merge is not seen.
 - A second item linking the pull request after intent makes later writes refuse `pr_item_ambiguous`;
   links cannot be removed through this command.

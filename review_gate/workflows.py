@@ -308,3 +308,25 @@ def push_trigger(path: str, doc, branch: str) -> str:
     if "paths" in trigger or "paths-ignore" in trigger:
         return PATH_FILTERED
     return RUNS
+
+
+def push_path_filter(path: str, doc) -> tuple:
+    """The tip's validated push ``(paths, paths-ignore)`` lists, absent lists as None."""
+    named, trigger = _event_trigger(path, _on(path, doc), "push")
+    if not named or trigger is None:
+        return None, None
+    if "paths" in trigger and "paths-ignore" in trigger:
+        _unreadable(path, "`on.push` has both `paths` and `paths-ignore`")
+    if "paths-ignore" in trigger:
+        ignore = _filter_list(path, "push", trigger, "paths-ignore")
+        for pattern in ignore:
+            if not paths_ignore_readable(pattern):
+                _unreadable(path, f"paths-ignore pattern {pattern!r} is outside the paths-ignore grammar")
+        return None, ignore
+    if "paths" not in trigger:
+        return None, None
+    patterns = _filter_list(path, "push", trigger, "paths")
+    for pattern in patterns:
+        if not path_filter_readable(pattern):
+            _unreadable(path, f"path pattern {pattern!r} is outside the shared glob grammar")
+    return patterns, None
