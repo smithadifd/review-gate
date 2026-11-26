@@ -159,13 +159,9 @@ class LedgerRecords:
                 refuse("receipt_doc_altered", str(event.id))
             if verified_documents is not None:
                 verified_documents[event.id] = content
-            if current and p["changed_files_sha256"] != subject.files_sha256:
-                refuse("receipt_files_mismatch", str(event.id))
             derived = family(p.get("served_model"))
             if derived is not None and p.get("family") != derived:
                 refuse("receipt_family_mismatch", str(event.id))
-            if p["verdict"] == "changes_requested" and not p["findings"]:
-                refuse("receipt_changes_requested_empty", str(event.id))
             result.append(event)
         return result
 
@@ -192,6 +188,12 @@ class LedgerRecords:
             p = event.payload
             if (p["lane"], p["round"], p["head"]) in deciding_slots and "supersedes" in p:
                 refuse("receipt_settlement_unsupported", str(event.id))
+        for event in lanes.values():
+            p = event.payload
+            if p["changed_files_sha256"] != subject.files_sha256:
+                refuse("receipt_files_mismatch", str(event.id))
+            if p["verdict"] == "changes_requested" and not p["findings"]:
+                refuse("receipt_changes_requested_empty", str(event.id))
         counted = tuple(e for e in lanes.values() if e.payload["verdict"] in ("approved", "changes_requested"))
         if len(counted) < 2:
             refuse("receipts_insufficient", "two distinct deciding lanes are required")

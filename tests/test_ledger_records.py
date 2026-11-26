@@ -114,6 +114,20 @@ def test_changes_requested_empty_is_contradictory(ledger_rig):
     refused("receipt_changes_requested_empty", r.port.receipts, r.subject, ITEM)
 
 
+@pytest.mark.parametrize("stage", ["receipts", "open_bugs", "hardening"])
+@pytest.mark.parametrize("earlier", [
+    {"verdict": "changes_requested"},
+    {"changed_files_sha256": "f" * 64},
+], ids=["empty-request", "wrong-files"])
+def test_later_round_approval_replaces_decision_only_failure(ledger_rig, stage, earlier):
+    r = ledger_rig
+    first = r.receipt(**earlier)
+    latest = r.documented_receipt(round_=2, prior_receipt=first.id)
+    other = r.documented_receipt("claude")
+    answer = getattr(r.port, stage)(r.subject, ITEM)
+    assert {identity[0] for identity in answer[0]} == {latest.id, other.id}
+
+
 def test_family_is_derived_not_trusted(ledger_rig):
     r = ledger_rig
     r.receipt(family="anthropic")
@@ -255,6 +269,19 @@ def test_round_cap_covers_earlier_heads_and_exact_pr(ledger_rig):
     refused("review_round_not_granted", r.port.round_cap, r.subject, ITEM)
     r.grant(review_round_grant_id(r.subject.repo, 7, 5))
     assert r.port.round_cap(r.subject, ITEM)
+
+
+@pytest.mark.parametrize("round_,counts", [(1, True), (4, False)])
+def test_old_head_empty_request_does_not_require_round_grant(ledger_rig, round_, counts):
+    r = ledger_rig
+    prior = None
+    for n in range(1, round_ + 1):
+        prior = r.receipt(head=oid("old"), round_=n, verdict="changes_requested",
+                          counts_toward_cap=counts,
+                          **({} if prior is None else {"prior_receipt": prior.id}))
+    r.pair()
+    _, grants = r.port.round_cap(r.subject, ITEM)
+    assert grants == (), "an old empty request must not introduce a round-grant requirement"
 
 
 def test_a_lower_round_grant_never_lifts_a_later_round(ledger_rig):

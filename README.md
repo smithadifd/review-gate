@@ -148,8 +148,9 @@ count, bound to repository, pull request, head and files digest. Every inline re
 is verified by the ledger. The reserved event remains authority except that stage 6 derives
 the harden set from those verified bytes through the writer's derivation. Only the highest
 round per lane decides; a replacing record anywhere in that deciding slot refuses `receipt_settlement_unsupported`.
-Approved and changes-requested receipts count;
-an empty changes request refuses. Crashed and unparseable newest rounds never fall back.
+Only deciding receipts are checked for the current files digest and an empty changes request;
+a later-round approval can correct either failure. Approved and changes-requested receipts count.
+Crashed and unparseable newest rounds never fall back.
 Block findings each need their own standing waiver. Every document harden, including one
 collapsed into a block on the same id in the event, needs an exact-source child outside
 `--items`; a block waiver does not answer it. The source is `<item>:harden:<origin>`, with
@@ -158,8 +159,9 @@ the document's harden set; any other document harden must have a block event ent
 else `receipt_document_inconsistent` names the receipt event. Missing, by-path or altered
 documents refuse `receipt_doc_missing`, `receipt_doc_not_inline` or `receipt_doc_altered`;
 verified documents that cannot derive retain the derivation's refusal name. Stage 6's token
-retains the document harden ids for the pre-merge recheck. Counted rounds past three need
-a standing grant or a current cite.
+retains the document harden ids for the pre-merge recheck. Round-cap accounting separately reads
+all heads and honours `counts_toward_cap`; counted rounds past three need a standing grant or a
+current cite, without applying the deciding-only digest and empty-request checks.
 
 The database's adjacent `config.json` may set `"review_second_family": "anthropic"` (also
 `openai` or `google`). It can only add a family requirement. A malformed, unreadable or symlinked
